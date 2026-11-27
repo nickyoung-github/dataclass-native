@@ -169,3 +169,6 @@ src/dataclass_native/_version.py
 
 # Generated C++ in tests and builds
 generated/
+
+# The examples are built with this repository's dataclass-native, so are not locked
+examples/*/uv.lock

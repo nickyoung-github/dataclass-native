@@ -1,0 +1,2 @@
+# Here, dataclass_native is a dependency, not the project: so that imports are sorted as in a project of your own
+extend = "../pyproject.toml"
