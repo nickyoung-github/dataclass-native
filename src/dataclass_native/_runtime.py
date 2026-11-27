@@ -166,6 +166,15 @@ def _installing[T](make: Callable[[], T]) -> T:
             _pending.clear()
 
 
+def native_object(obj: Any) -> Any:
+    """The native object of an instance of a bound class"""
+    try:
+        return obj.__dict__[HANDLE]
+    except KeyError:
+        # Made by pydantic
+        return _adopt(obj)
+
+
 def wrap(cls: type, handle: Any) -> Any:
     """An instance of a bound class, holding the given native object"""
     obj = object.__new__(cls)

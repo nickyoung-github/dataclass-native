@@ -1,8 +1,8 @@
 # dataclass-native: msgpack wire format
 
 How a value of a schema type is written as [msgpack](https://github.com/msgpack/msgpack/blob/master/spec.md). Every
-implementation (Python now, C++ and Rust to come) writes and reads this. The Python one, `to_msgpack` and
-`from_msgpack`, is the reference: where this document and it disagree, one of them has a bug.
+implementation (Python and C++ now, Rust to come) writes and reads this. The Python one is the reference: where
+this document and it disagree, one of them has a bug.
 
 A reader is given the type it is to read. The data does not describe itself, beyond what a reader needs to tell
 the members of a union apart and to skip a field it does not know.
@@ -94,12 +94,15 @@ through others.
 - A field which is not in a struct's map takes its default. If it has none, the data is rejected.
 - An entry of a struct's map which is not one of its fields is ignored. So a field may be added, given a default,
   or removed, and old and new readers each read what the other wrote.
-- The entries of a struct's map, and of a bundle's, may be in any order.
+- The entries of a struct's map, of a bundle's and of a discriminated union's may be in any order.
 - A float is read from either size. An integer is rejected where a float is expected, and the reverse.
 - An integer outside the range of its type is rejected, as is a timestamp which is not a whole number of
   microseconds, and an enum name which is not a member's.
 - A datetime is read as UTC, whatever timezone it was written from: it is an instant.
-- Sets and maps are read whatever their order. A map with a key twice is rejected.
+- Sets and maps are read whatever their order.
+- A map with a key twice is rejected, where the key is a field's or the map is a `Mapping`. Elsewhere, such as
+  within a field which is ignored, a reader may not notice.
+- A reader may reject data which is nested more than 256 deep.
 
 ## Not decided
 

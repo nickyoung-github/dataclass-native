@@ -20,6 +20,7 @@ from ..schema import SchemaError
 
 RUNTIME = "dataclass_native"
 RUNTIME_HEADER = "dataclass_native/types.hpp"
+REFLECT_HEADER = "dataclass_native/reflect.hpp"
 
 # Including alternative tokens, and identifiers with special meaning
 KEYWORDS = frozenset(
@@ -182,6 +183,8 @@ class _ModuleGenerator:
         structs = [self.__struct(st) for st in module.structs]
 
         includes = [f"<{h}>" for h in sorted(self.__std_includes)]
+        if enums or structs:
+            includes.append(f'"{REFLECT_HEADER}"')
         if self.__runtime:
             includes.append(f'"{RUNTIME_HEADER}"')
         includes.extend(f'"{header_path(d)}"' for d in module.dependencies)
@@ -224,9 +227,14 @@ class _ModuleGenerator:
             "name": identifier(enum.name),
             "underlying": underlying,
             "members": [
-                {"name": identifier(m.name), "value": _int(m.value, 64, True)}
+                {
+                    "name": identifier(m.name),
+                    "value": _int(m.value, 64, True),
+                    "literal": _literal(m.name),
+                }
                 for m in enum.members
             ],
+            **self.__described(enum),
         }
 
     def __struct(self, struct: s.Struct) -> dict[str, Any]:
@@ -242,7 +250,45 @@ class _ModuleGenerator:
             else:
                 members.append(f"{typ} {member}{{}};")
 
-        return {"name": identifier(struct.name), "members": members}
+        return {
+            "name": identifier(struct.name),
+            "members": members,
+            "shares": "true" if self.__shares(struct.ref, set()) else "false",
+            "fields": [
+                {
+                    "name": identifier(f.name),
+                    "literal": _literal(f.name),
+                    "has_default": "true" if f.has_default else "false",
+                }
+                for f in struct.fields
+            ],
+            **self.__described(struct),
+        }
+
+    def __described(self, item: s.Struct | s.Enum) -> dict[str, str]:
+        """What the item's reflection gives of it, besides its fields or members"""
+        return {
+            "qualified": f"::{namespace(item.module)}::{identifier(item.name)}",
+            "name_literal": _literal(item.name),
+            "tag_literal": _literal(item.tag),
+        }
+
+    def __shares(self, t: s.Type, seen: set[tuple[str, str]]) -> bool:
+        """Whether a value of the type may hold, however deeply, a Shared one"""
+        for inner in _walk(t):
+            if isinstance(inner, s.Shared):
+                return True
+            if (
+                isinstance(inner, s.StructRef)
+                and (inner.module, inner.name) not in seen
+            ):
+                seen.add((inner.module, inner.name))
+                if any(
+                    self.__shares(f.type, seen)
+                    for f in self.__schema.struct(inner).fields
+                ):
+                    return True
+        return False
 
     def __name(self, module: str, name: str) -> str:
         if module == self.__module.name:
@@ -282,9 +328,13 @@ class _ModuleGenerator:
             case s.Map(key, value):
                 self.__std_includes.add("map")
                 return f"std::map<{self.type(key)}, {self.type(value)}>"
-            case s.Union(members):
+            case s.Union(members, discriminated):
+                types = ", ".join(self.type(m) for m in members)
+                if discriminated:
+                    self.__runtime = True
+                    return f"{RUNTIME}::DiscriminatedUnion<{types}>"
                 self.__std_includes.add("variant")
-                return f"std::variant<{', '.join(self.type(m) for m in members)}>"
+                return f"std::variant<{types}>"
             case s.Shared(target):
                 self.__runtime = True
                 return f"{RUNTIME}::Shared<{self.type(target)}>"
@@ -397,7 +447,7 @@ def _int(v: int, bits: int, signed: bool) -> str:
     return f"{v}LL" if bits == 64 and not -(2**31) <= v < 2**31 else str(v)
 
 
-def _string(v: str) -> str:
+def _literal(v: str) -> str:
     """A string literal, escaping all but printable ASCII as octal, which unlike hex escapes cannot run on"""
     data = v.encode()
     chars = []
@@ -409,7 +459,12 @@ def _string(v: str) -> str:
             chars.append(c)
         else:
             chars.append(f"\\{b:03o}")
-    literal = f'"{"".join(chars)}"'
+    return f'"{"".join(chars)}"'
+
+
+def _string(v: str) -> str:
+    """A std::string"""
+    data, literal = v.encode(), _literal(v)
     # With an embedded NUL, the length must be given
     return (
         f"std::string({literal}, {len(data)})"

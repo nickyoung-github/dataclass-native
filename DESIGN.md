@@ -78,7 +78,7 @@ it is wrong, not missing.
 | `tuple[A, B]` | `Tuple` | `std::tuple<A, B>` | `(A, B)` |
 | `frozenset[K]` | `Set` | `std::set<K>` | `BTreeSet<K>` |
 | `Mapping[K, V]` | `Map` | `std::map<K, V>` | `BTreeMap<K, V>` |
-| `A \| B`, `DiscriminatedUnion[A, B]` | `Union` | `std::variant<A, B>` | `enum` |
+| `A \| B`, `DiscriminatedUnion[A, B]` | `Union` | `std::variant<A, B>`, `dataclass_native::DiscriminatedUnion<A, B>` | `enum` |
 | `Shared[A]` | `Shared` | `dataclass_native::Shared<A>` | `Arc<A>` |
 | (recursion) | `Indirect` | `dataclass_native::Indirect<A>` | `Box<A>` |
 
@@ -160,10 +160,20 @@ This means:
 
 Identities are only valid within one write. Content-hash ids, for deduplication across writes, may come later.
 
-**C++ drivers.** For each struct, the generator emits `dataclass_native::reflect<T>`: its tag, and a tuple of
-`(name, member pointer)` pairs. The drivers are written against that:
+**C++ drivers.** For each struct, the generator emits `dataclass_native::Reflect<T>`: its name, its tag, whether it
+may hold a `Shared` value, and a tuple of its fields, each a name, a member pointer and whether it has a default.
+For each enum, its members' names. The drivers are written against that, and otherwise go by the C++ type alone:
 
-- msgpack: a small hand-written encoder and decoder, with no msgpack-c or Boost dependency.
+- How a value is written must therefore follow from its C++ type. So a discriminated union is a type of its own,
+  `dataclass_native::DiscriminatedUnion<A, B>`, which is a `std::variant<A, B>`: nothing else tells it from a
+  plain union of the same members. And a `tuple[UInt8, ...]` is written as `bytes` is, both being a
+  `std::vector<std::uint8_t>`.
+- msgpack: `dataclass_native/msgpack.hpp`, a hand-written encoder and decoder, with no msgpack-c or Boost
+  dependency. It reads from the bytes it is given, without first building a tree of them: it finds a bundle's
+  tables before it reads the root, and reads each shared object when first referred to.
+- From Python, an object stored natively is written and read by it, through `__msgpack__` and `__from_msgpack__`
+  of its native class. A pydantic dataclass, or a class which may hold one, is read by the Python codec instead,
+  so that pydantic validates what is read.
 - Arrow: nanoarrow, exported through the Arrow C Data Interface (`__arrow_c_stream__`). pyarrow, polars and duckdb
   can read it without copying, and our extension needn't link Arrow C++, which avoids version clashes with pyarrow.
 - Parquet: written with pyarrow from Python. For C++ users, an optional component linking Arrow C++.
@@ -178,7 +188,8 @@ Identities are only valid within one write. Content-hash ids, for deduplication 
 `dataclass-native generate nanobind` writes the headers and, for each schema module `pkg.mod`, the source of the
 extension module `pkg._mod_native`, which binds the module's types with nanobind:
 
-- A native class per struct, default-constructed, with a property per field. A native enum per enum.
+- A native class per struct, default-constructed, with a property per field, and `__msgpack__` and
+  `__from_msgpack__`, which write and read it. A native enum per enum.
 - `dataclass_native/python.hpp` converts the types of `types.hpp`: `Bytes` and `bytes`, the dates and times,
   `Shared<T>` (the Python object of its `T`, which it keeps alive, so sharing a value shares the object) and
   `Indirect<T>` (as its `T`). The standard containers use nanobind's own conversions.
@@ -272,8 +283,8 @@ what an object is made from, before the native class checks it.
 1. **Done:** schema model, introspection, C++ header generation, `@native` with its modes, CLI.
 2. **Done:** nanobind extensions, the descriptor runtime, the schema-hash check, the CMake package, and
    `@native_function`.
-3. **Partly done:** the written wire format specification and the pure-Python msgpack codec. To come:
-   `reflect<T>` and the C++ msgpack driver.
+3. **Done:** the written wire format specification, the pure-Python msgpack codec, `Reflect<T>` and the C++
+   msgpack driver.
 4. Arrow via nanoarrow, Parquet via pyarrow, optional Arrow C++ Parquet.
 5. Rust: structs with serde, PyO3 bindings, Arrow.
 6. Mutable classes.

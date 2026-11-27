@@ -36,3 +36,38 @@ namespace {{ namespace }}
     };
 {% endfor %}
 } // namespace {{ namespace }}
+{% if enums or structs %}
+
+// What dataclass_native/reflect.hpp describes of each
+namespace dataclass_native
+{
+{% set gap = joiner("\n") %}
+{% for enum in enums %}
+{{ gap() }}    template <>
+    struct Reflect<{{ enum.qualified }}>
+    {
+        static constexpr std::string_view name = {{ enum.name_literal }};
+        static constexpr std::string_view tag = {{ enum.tag_literal }};
+        static constexpr std::array members{
+{% for member in enum.members %}
+            Member{ {{- enum.qualified }}::{{ member.name }}, {{ member.literal }}},
+{% endfor %}
+        };
+    };
+{% endfor %}
+{% for struct in structs %}
+{{ gap() }}    template <>
+    struct Reflect<{{ struct.qualified }}>
+    {
+        static constexpr std::string_view name = {{ struct.name_literal }};
+        static constexpr std::string_view tag = {{ struct.tag_literal }};
+        static constexpr bool shares = {{ struct.shares }};
+        static constexpr std::tuple fields{
+{% for field in struct.fields %}
+            Field{ {{- field.literal }}, &{{ struct.qualified }}::{{ field.name }}, {{ field.has_default }}},
+{% endfor %}
+        };
+    };
+{% endfor %}
+} // namespace dataclass_native
+{% endif %}

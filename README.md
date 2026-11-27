@@ -16,7 +16,7 @@ The approach of dataclass-native is to generate native classes - currently C++, 
 whose storage the Python classes use directly. Native serialisation (msgpack, Arrow/Parquet) is planned.
 
 **Status:** early. Schema introspection, C++ header generation and the native Python binding work. Serialisation
-to msgpack works in Python, with C++ and Rust to come: see [DESIGN.md](DESIGN.md).
+to msgpack works, in Python and C++. Arrow, Parquet and Rust are to come: see [DESIGN.md](DESIGN.md).
 
 ## Defining a schema
 
@@ -94,7 +94,7 @@ with no dependency on Python:
 struct Trade
 {
     std::int64_t id{};
-    std::variant<Cash, Bond> instrument{};
+    dataclass_native::DiscriminatedUnion<Cash, Bond> instrument{};
     dataclass_native::Shared<Party> counterparty{};
     std::vector<std::string> tags = std::vector<std::string>{};
     std::optional<std::map<Currency, double>> limits = std::nullopt;
@@ -189,9 +189,17 @@ from_msgpack(Trade, data) == trade  # True
 ```
 
 The bytes are msgpack, in the format of [WIRE_FORMAT.md](WIRE_FORMAT.md). An object held by `Shared` fields is
-written once, so the party two trades share is still one object when they are read back. For now this is
-implemented in Python, which works in every mode; the C++ implementation, reading and writing the structs
-directly, is to come.
+written once, so the party two trades share is still one object when they are read back.
+
+An object stored natively is written and read by C++, and a plain one, as in `pure` mode, by Python. Both write
+the same bytes, so what one writes the other reads. C++ of your own does the same, with no dependency on Python:
+
+```cpp
+#include "dataclass_native/msgpack.hpp"
+
+dataclass_native::Bytes data = dataclass_native::msgpack::to_msgpack(trade);
+auto read = dataclass_native::msgpack::from_msgpack<Trade>(data);
+```
 
 ## Modes
 

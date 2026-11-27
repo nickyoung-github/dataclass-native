@@ -9,9 +9,11 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/variant.h>
 
 #include <datetime.h>
 
+#include "dataclass_native/msgpack.hpp"
 #include "dataclass_native/types.hpp"
 
 namespace dataclass_native::python
@@ -39,6 +41,20 @@ namespace dataclass_native::python
         value = std::chrono::microseconds{(days * 86'400 + PyDateTime_DELTA_GET_SECONDS(delta)) * 1'000'000 +
                                           PyDateTime_DELTA_GET_MICROSECONDS(delta)};
         return true;
+    }
+
+    // A native object as msgpack, and one read from it: see msgpack.hpp
+    template <class T>
+    nanobind::bytes to_msgpack(const T& value)
+    {
+        const Bytes data = msgpack::to_msgpack(value);
+        return nanobind::bytes(reinterpret_cast<const char*>(data.data()), data.size());
+    }
+
+    template <class T>
+    T from_msgpack(nanobind::bytes data)
+    {
+        return msgpack::from_msgpack<T>({reinterpret_cast<const std::uint8_t*>(data.c_str()), data.size()});
     }
 } // namespace dataclass_native::python
 
@@ -213,6 +229,28 @@ struct type_caster<dataclass_native::Shared<T>>
     static handle from_cpp(const Value& value, rv_policy policy, cleanup_list* cleanup) noexcept
     {
         return Caster::from_cpp(value.ptr(), policy, cleanup);
+    }
+};
+
+// As the std::variant it is
+template <typename... Ts>
+struct type_caster<dataclass_native::DiscriminatedUnion<Ts...>>
+{
+    using Caster = make_caster<std::variant<Ts...>>;
+    NB_TYPE_CASTER(dataclass_native::DiscriminatedUnion<Ts...>, Caster::Name)
+
+    bool from_python(handle src, uint32_t flags, cleanup_list* cleanup) noexcept
+    {
+        Caster caster;
+        if (!caster.from_python(src, flags, cleanup))
+            return false;
+        value = Value(caster.operator cast_t<std::variant<Ts...>>());
+        return true;
+    }
+
+    static handle from_cpp(const Value& value, rv_policy policy, cleanup_list* cleanup) noexcept
+    {
+        return Caster::from_cpp(value.as_variant(), policy, cleanup);
     }
 };
 
