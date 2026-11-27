@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from schemas import functions
 from schemas.common import Currency, Fund, Money, Party, Side
 from schemas.kinds import Kinds
 from schemas.sub.inner import Order
@@ -407,3 +408,62 @@ def test_pydantic_model():
         match="pydantic models are not supported: use pydantic.dataclasses.dataclass",
     ):
         _any(native)(Model)
+
+
+def test_native_function():
+    assert functions.implementation() == ("native" if BOUND else "python")
+
+    amounts = (MONEY, Money(2.0, Currency.EUR), Money(4.0))
+    assert functions.total(amounts) == Money(4.0)
+    assert functions.total(amounts, Currency.EUR) == Money(3.5, Currency.EUR)
+    assert functions.total(currency=Currency.GBP, amounts=amounts) == Money(
+        0.0, Currency.GBP
+    )
+    assert functions.total.__doc__ == "The sum of the amounts in the currency"
+
+    assert functions.renamed(PARTY) == replace(PARTY, name="?")
+    assert functions.renamed(PARTY, "New").name == "New" and PARTY.name == "Acme"
+    assert functions.same(PARTY) is PARTY
+    assert functions.later(dt.date(2026, 12, 31), 1) == dt.date(2027, 1, 1)
+    assert functions.nothing(1) is None
+
+
+@pytest.mark.parametrize(
+    ("function", "missing", "result"),
+    [
+        (functions.python_only, "schemas._functions has no python_only", 2),
+        (functions.no_extension, "there is no extension module schemas._absent", 2),
+    ],
+)
+def test_native_function_without_native_implementation(function, missing, result):
+    if mode() is Mode.STRICT:
+        name = f"schemas.functions.{function.__name__}"
+        with pytest.raises(
+            NativeBindingError,
+            match=f"No native function is available for {name}: {missing}. Build",
+        ):
+            function(1)
+    else:
+        assert function(1) == result
+
+
+@bound_only
+def test_native_function_rejects():
+    with pytest.raises(
+        TypeError, match=r"schemas.functions.total: amounts cannot be \[\]"
+    ):
+        functions.total(_any([]))
+    with pytest.raises(TypeError, match="total: currency cannot be 1"):
+        functions.total((), _any(1))
+    # Exactly a Party, as a field must be
+    with pytest.raises(TypeError, match="renamed: party cannot be Fund"):
+        functions.renamed(FUND)
+    with pytest.raises(TypeError, match="too many positional arguments"):
+        _any(functions.nothing)(1, 2)
+    # By nanobind
+    with pytest.raises(TypeError, match="incompatible function arguments"):
+        functions.nothing(_any("1"))
+    with pytest.raises(
+        TypeError, match=r"schemas.functions.unannotated: value must be annotated"
+    ):
+        functions.unannotated(1)

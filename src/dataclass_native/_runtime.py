@@ -4,24 +4,29 @@ Binds @native classes to their native classes, those of their module's extension
 A bound class's instances hold a native object, their handle, as __native__. Its fields are descriptors which get and
 set the handle's members, converting between Python values and those of the extension: the handles of @native
 classes, the extension's enums, and lists, sets and dicts.
+
+A function marked with @native_function is bound likewise, to the function of its name in a hand-written extension:
+its arguments, and what it returns, are converted as fields are.
 """
 
 import datetime as dt
+import inspect
 from collections.abc import Callable, Mapping
 from copyreg import __newobj__  # pyright: ignore[reportAttributeAccessIssue]
 from dataclasses import MISSING, fields
 from enum import Enum
 from functools import wraps
 from importlib import import_module
+from importlib.util import resolve_name
 from threading import RLock
-from types import ModuleType
-from typing import Any
+from types import ModuleType, NoneType
+from typing import Any, get_type_hints
 from weakref import WeakValueDictionary
 
 from . import schema as s
 from ._mode import ENV_VAR, Mode
 from ._native import NativeBindingError, extension_name
-from .introspect import describe
+from .introspect import describe, resolve
 
 HANDLE = "__native__"
 
@@ -65,6 +70,10 @@ _pending: list[_Binding] = []
 # The Python objects of the handles which have been shared, so that a Shared field gives the object it was given
 _shared: WeakValueDictionary[int, Any] = WeakValueDictionary()
 
+_REMEDY = (
+    f"Build its extension, or set {ENV_VAR} to {Mode.MIXED.value} or {Mode.PURE.value}"
+)
+
 
 def bind(cls: type, required: bool) -> type | None:
     """
@@ -74,20 +83,81 @@ def bind(cls: type, required: bool) -> type | None:
     """
     with _lock:
         try:
-            binding = _binding(cls)
-            for pending in _pending:
-                _install(pending)
-            return binding.native
+            return _installing(lambda: _binding(cls)).native
         except _Missing as e:
-            for pending in _pending:
-                del _bindings[pending.cls]
             if required:
                 raise NativeBindingError(
-                    f"No native binding is available for {cls.__module__}.{cls.__qualname__}: {e}. Build its "
-                    f"extension, or set {ENV_VAR} to {Mode.MIXED.value} or {Mode.PURE.value}"
+                    f"No native binding is available for {cls.__module__}.{cls.__qualname__}: {e}. {_REMEDY}"
                 ) from None
             _bindings[cls] = None
             return None
+
+
+def bind_function(
+    fn: Callable[..., Any], module: str, required: bool
+) -> Callable[..., Any]:
+    """
+    What to call for a function marked with @native_function: one which calls the function of its name in the
+    extension module, converting its arguments and what that returns.
+
+    :param required: Raise if it has no native function, or a class it uses has no native class, rather than return fn
+    """
+    name = f"{fn.__module__}.{fn.__qualname__}"
+    signature = inspect.signature(fn)
+    parameters = list(signature.parameters)
+    hints = get_type_hints(fn, include_extras=True)
+    if unannotated := [p for p in (*parameters, "return") if p not in hints]:
+        raise TypeError(f"{name}: {', '.join(unannotated)} must be annotated")
+
+    def make() -> tuple[Callable[..., Any], list[_Converter], _Converter]:
+        extension = _import(resolve_name(module, fn.__module__.rpartition(".")[0]))
+        try:
+            native = getattr(extension, fn.__name__)
+        except AttributeError:
+            raise _Missing(f"{extension.__name__} has no {fn.__name__}") from None
+        returns = hints["return"]
+        return (
+            native,
+            [_to_native(resolve(hints[p], f"{name}({p})")) for p in parameters],
+            None if returns is NoneType else _from_native(resolve(returns, name)),
+        )
+
+    try:
+        native, to_native, from_native = _installing(make)
+    except _Missing as e:
+        if required:
+            raise NativeBindingError(
+                f"No native function is available for {name}: {e}. {_REMEDY}"
+            ) from None
+        return fn
+
+    def call(*args: Any, **kwargs: Any) -> Any:
+        if kwargs or len(args) != len(parameters):
+            arguments = signature.bind(*args, **kwargs)
+            arguments.apply_defaults()
+            args = arguments.args
+
+        converted = []
+        for parameter, convert, value in zip(parameters, to_native, args):
+            try:
+                converted.append(convert(value) if convert else value)
+            except (TypeError, ValueError):
+                raise TypeError(f"{name}: {parameter} cannot be {value!r}") from None
+
+        result = native(*converted)
+        return from_native(result) if from_native else result
+
+    return call
+
+
+def _installing[T](make: Callable[[], T]) -> T:
+    """What make returns, having installed the classes which it bound: or, if it raises, having unbound them"""
+    with _lock:
+        try:
+            made = make()
+            for pending in _pending:
+                _install(pending)
+            return made
         except BaseException:
             for pending in _pending:
                 del _bindings[pending.cls]
@@ -126,7 +196,11 @@ def _binding(cls: type) -> _Binding:
 
 
 def _extension(module: str) -> ModuleType:
-    name = extension_name(module)
+    return _import(extension_name(module))
+
+
+def _import(name: str) -> ModuleType:
+    """An extension module, which may be missing"""
     try:
         return import_module(name)
     except ModuleNotFoundError as e:

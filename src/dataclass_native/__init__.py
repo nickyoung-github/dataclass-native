@@ -1,7 +1,7 @@
 """Python dataclasses as a data description language, stored in generated native structs"""
 
 from ._mode import ENV_VAR, Mode, mode, set_mode
-from ._native import NativeBindingError, is_native, native
+from ._native import NativeBindingError, is_native, native, native_function
 from .cli import cmake_dir, include_dir
 from .types import (
     DiscriminatedUnion,
@@ -39,5 +39,6 @@ __all__ = (
     "is_native",
     "mode",
     "native",
+    "native_function",
     "set_mode",
 )
