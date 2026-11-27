@@ -317,10 +317,10 @@ def _run(tmp_path: Path, headers: dict[str, str], program: str, *arguments: str)
     for relative, contents in headers.items():
         path = tmp_path / "include" / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(contents)
+        path.write_text(contents, encoding="utf-8")
 
     source = tmp_path / "main.cpp"
-    source.write_text(program)
+    source.write_text(program, encoding="utf-8")
     binary = tmp_path / "main"
     compiled = subprocess.run(
         [
@@ -424,7 +424,7 @@ int main(int, char** argv)
     assert(std::get<std::int64_t>(*trade.note) == 7);
     assert(trade.executed.time_since_epoch() == std::chrono::microseconds{-999'995});
     assert(trade.payload.size() == 256 && trade.payload[255] == 255);
-    assert(trade.tags[2] == "caf\u00e9");
+    assert(trade.tags[2] == "caf\\u00e9");
     // What was shared still is, and what was not is not
     assert(trade.broker->ptr() == trade.parties[0].ptr() && trade.parties[0].ptr() == trade.parties[1].ptr());
     assert(trade.parties[2] == trade.parties[0] && trade.parties[2].ptr() != trade.parties[0].ptr());
