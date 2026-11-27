@@ -1,7 +1,10 @@
 """The @native decorator, marking a dataclass as part of the schema and binding it to its native equivalent"""
 
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass, is_dataclass
+from functools import wraps
+from types import FunctionType
 from typing import Any, overload
 from weakref import WeakKeyDictionary
 
@@ -49,6 +52,51 @@ def native(cls: Any = None, /, *, tag: str | None = None) -> Any:
         return cls
 
     return decorate if cls is None else decorate(cls)
+
+
+def native_function[F: Callable[..., Any]](module: str) -> Callable[[F], F]:
+    """
+    Marks a function as implemented natively, by the function of its name in an extension module.
+
+    Its @native arguments are given to the native function as their native objects, and what that returns becomes the
+    object of the return annotation, neither being copied. The function's body is its Python implementation: called
+    in pure mode, and in mixed mode if the native function, or the binding of a class it uses, is not available.
+    Strict mode (the default) then raises, when the function is first called.
+
+    :param module: The extension module: relative to the function's package if it starts with a dot, e.g. "._pricing"
+    """
+
+    def decorate(fn: Any) -> Any:
+        if not isinstance(fn, FunctionType):
+            raise TypeError(
+                f"@native_function must be applied to a function, not to {fn!r}"
+            )
+        code = fn.__code__
+        if code.co_kwonlyargcount or code.co_flags & (
+            inspect.CO_VARARGS | inspect.CO_VARKEYWORDS
+        ):
+            raise TypeError(
+                f"{fn.__qualname__}: keyword-only parameters, *args and **kwargs are not supported"
+            )
+
+        if (mode := _fix_mode()) is Mode.PURE:
+            return fn
+
+        # Once first called: what to call
+        bound: list[Callable[..., Any]] = []
+
+        @wraps(fn)
+        def call(*args: Any, **kwargs: Any) -> Any:
+            if not bound:
+                # Lazily, as classes are bound: the function's module imports without the extension
+                from ._runtime import bind_function
+
+                bound.append(bind_function(fn, module, required=mode is Mode.STRICT))
+            return bound[0](*args, **kwargs)
+
+        return call
+
+    return decorate
 
 
 def extension_name(module: str) -> str:

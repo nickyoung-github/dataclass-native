@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import dataclass_native._mode as mode_module
-from dataclass_native import ENV_VAR, Mode, mode, native, set_mode
+from dataclass_native import ENV_VAR, Mode, mode, native, native_function, set_mode
 
 
 def test_pure_mode_leaves_class_unchanged():
@@ -61,6 +61,27 @@ def test_native_rejects_generic():
 
     with pytest.raises(TypeError, match="generic"):
         native(Box)
+
+
+def test_native_function_in_pure_mode():
+    def function(x: int) -> int:
+        return x
+
+    assert native_function("extension")(function) is function
+
+
+@pytest.mark.parametrize(
+    ("function", "message"),
+    [
+        (int, "must be applied to a function"),
+        (lambda *args: args, r"keyword-only parameters, \*args and \*\*kwargs"),
+        (lambda **kwargs: kwargs, "keyword-only parameters"),
+        (lambda *, x: x, "keyword-only parameters"),
+    ],
+)
+def test_native_function_rejects(function, message):
+    with pytest.raises(TypeError, match=message):
+        native_function("extension")(function)
 
 
 def test_set_mode_after_decoration():

@@ -66,6 +66,11 @@ def describe(cls: type) -> s.Struct | s.Enum:
     return _Builder().describe(cls)
 
 
+def resolve(tp: Any, where: str) -> s.Type:
+    """The schema type of a type annotation, alone, as describe: where names it, in an error"""
+    return _Builder().resolve(tp, where)
+
+
 def _module_name(module: str | ModuleType) -> str:
     return module.__name__ if isinstance(module, ModuleType) else module
 
@@ -133,6 +138,9 @@ class _Builder:
             fields=tuple(s.Field(name, t) for name, t, _ in self.__structs[cls].fields),
             cls=cls,
         )
+
+    def resolve(self, tp: Any, where: str) -> s.Type:
+        return self.__resolve(tp, where)
 
     def __use_module(self, name: str):
         if name not in self.__modules:
