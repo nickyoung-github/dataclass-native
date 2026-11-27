@@ -1,8 +1,9 @@
 """
 Reads and writes values of the schema's types as msgpack, in the wire format of WIRE_FORMAT.md.
 
-This is the reference implementation of that format, in Python alone: it gets and sets the fields of @native objects
-as any Python code does, so works in every mode.
+write() and read() are the reference implementation of that format, in Python alone: they get and set the fields of
+@native objects as any Python code does, so work in every mode. to_msgpack() and from_msgpack() use them, unless the
+object is stored natively: then the C++ of dataclass_native/msgpack.hpp writes and reads the native object itself.
 """
 
 import datetime as dt
@@ -13,6 +14,7 @@ from weakref import WeakKeyDictionary
 
 from . import _msgpack as m
 from . import schema as s
+from ._mode import Mode, mode
 from ._native import is_native, native_info
 from .introspect import _tag, describe, resolve, walk
 
@@ -69,10 +71,44 @@ def from_msgpack(tp: Any, data: bytes) -> Any: ...
 
 def to_msgpack(value: Any, tp: Any = None) -> bytes:
     """
-    A value as msgpack, in the wire format.
+    A value as msgpack, in the wire format. An object stored natively is written natively.
 
     :param tp: Its type, if not a @native class: any type a field may have, e.g. tuple[Trade, ...]
     """
+    cls = type(value)
+    if tp in (None, cls) and _native_class(cls) is not None:
+        from ._runtime import native_object
+
+        return native_object(value).__msgpack__()
+    return write(value, tp)
+
+
+def from_msgpack(tp: Any, data: bytes) -> Any:
+    """
+    The value of a type, read from msgpack in the wire format. Raises ValueError if the data is not that.
+
+    :param tp: A @native class, or any type a field may have
+    """
+    native = _native_class(tp)
+    # A pydantic dataclass is made in Python, so that pydantic validates it
+    if native is not None and not _codec(tp).validated:
+        from ._runtime import wrap
+
+        return wrap(tp, native.__from_msgpack__(bytes(data)))
+    return read(tp, data)
+
+
+def _native_class(cls: Any) -> type | None:
+    """The native class of a @native class which is bound to one"""
+    if mode() is Mode.PURE or not (isinstance(cls, type) and is_native(cls)):
+        return None
+    from ._runtime import bind
+
+    return bind(cls, required=mode() is Mode.STRICT)
+
+
+def write(value: Any, tp: Any = None) -> bytes:
+    """As to_msgpack, in Python alone"""
     encode, _, bundled = _root(type(value) if tp is None else tp)
     writer = _Writer()
     root = bytearray()
@@ -100,12 +136,8 @@ def to_msgpack(value: Any, tp: Any = None) -> bytes:
     return bytes(out)
 
 
-def from_msgpack(tp: Any, data: bytes) -> Any:
-    """
-    The value of a type, read from msgpack in the wire format. Raises ValueError if the data is not that.
-
-    :param tp: A @native class, or any type a field may have
-    """
+def read(tp: Any, data: bytes) -> Any:
+    """As from_msgpack, in Python alone"""
     _, decode, bundled = _root(tp)
     wire = m.unpack(data)
     reader = _Reader([])
@@ -152,21 +184,22 @@ def _root(tp: Any) -> tuple[_Encode, _Decode, bool]:
         codec = _codec(tp)
         return codec.encode, codec.decode, codec.bundled
     t = resolve(tp, _name(tp))
-    return _encoder(t), _decoder(t), _reaches_shared(t, set())
+    return _encoder(t), _decoder(t), _reaches(t, set())
 
 
-def _reaches_shared(t: s.Type, seen: set[type]) -> bool:
-    """Whether a value of the type may hold, however deeply, a Shared one"""
+def _reaches(t: s.Type, classes: set[type]) -> bool:
+    """Whether a value of the type may hold, however deeply, a Shared one: adds the classes it may hold to classes"""
+    shared = False
     for inner in walk(t):
         if isinstance(inner, s.Shared):
-            return True
-        if isinstance(inner, s.StructRef) and inner.cls not in seen:
-            seen.add(inner.cls)
+            shared = True
+        if isinstance(inner, s.StructRef) and inner.cls not in classes:
+            classes.add(inner.cls)
             struct = describe(inner.cls)
             assert isinstance(struct, s.Struct)
-            if any(_reaches_shared(f.type, seen) for f in struct.fields):
-                return True
-    return False
+            for f in struct.fields:
+                shared |= _reaches(f.type, classes)
+    return shared
 
 
 class _Codec:
@@ -177,7 +210,10 @@ class _Codec:
         assert isinstance(struct, s.Struct)
         self.cls = cls
         self.tag = struct.tag
-        self.bundled = _reaches_shared(struct.ref, set())
+        classes: set[type] = set()
+        self.bundled = _reaches(struct.ref, classes)
+        self.validated = any(hasattr(c, "__pydantic_validator__") for c in classes)
+        """Whether it, or a class it may hold, is a pydantic dataclass"""
         self.header = _packed(m.pack_map, len(struct.fields))
         # Of each field: its name, that as written, and how to write and read it
         self.fields = [

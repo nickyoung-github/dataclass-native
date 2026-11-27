@@ -295,7 +295,9 @@ def test_generated_source():
                 .def(nanobind::init<>())
                 .def_rw("default", &::schemas::sub::inner::Order::default_)
                 .def_rw("new", &::schemas::sub::inner::Order::new_)
-                .def_rw("total", &::schemas::sub::inner::Order::total);
+                .def_rw("total", &::schemas::sub::inner::Order::total)
+                .def("__msgpack__", &dataclass_native::python::to_msgpack<::schemas::sub::inner::Order>)
+                .def_static("__from_msgpack__", &dataclass_native::python::from_msgpack<::schemas::sub::inner::Order>);
             schema["Order"] = "{schema_hash(describe(Order))}";
 
             m.attr("__schema__") = schema;

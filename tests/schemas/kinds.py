@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from dataclass_native import DiscriminatedUnion, UInt8, native
+from dataclass_native import DiscriminatedUnion, Shared, UInt8, native
 
 from .common import Money, Side
 
@@ -20,3 +20,12 @@ class Kinds:
     container: tuple[int, ...] | Mapping[str, Money] | None = None
     tagged: DiscriminatedUnion[Money, Side, int] = 0
     blobs: tuple[bytes, ...] = ()
+
+
+@native
+@dataclass(frozen=True)
+class Link:
+    """Shares objects of its own class"""
+
+    name: str
+    next: "Shared[Link] | None" = None

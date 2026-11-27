@@ -37,6 +37,7 @@ def test_common(headers):
         #include <cstdint>
         #include <optional>
         #include <string>
+        #include "dataclass_native/reflect.hpp"
 
         namespace schemas::common
         {
@@ -80,6 +81,72 @@ def test_common(headers):
                 bool operator==(const Fund&) const = default;
             };
         } // namespace schemas::common
+
+        // What dataclass_native/reflect.hpp describes of each
+        namespace dataclass_native
+        {
+            template <>
+            struct Reflect<::schemas::common::Currency>
+            {
+                static constexpr std::string_view name = "Currency";
+                static constexpr std::string_view tag = "schemas.common.Currency";
+                static constexpr std::array members{
+                    Member{::schemas::common::Currency::USD, "USD"},
+                    Member{::schemas::common::Currency::EUR, "EUR"},
+                    Member{::schemas::common::Currency::GBP, "GBP"},
+                };
+            };
+
+            template <>
+            struct Reflect<::schemas::common::Side>
+            {
+                static constexpr std::string_view name = "Side";
+                static constexpr std::string_view tag = "schemas.common.Side";
+                static constexpr std::array members{
+                    Member{::schemas::common::Side::BUY, "BUY"},
+                    Member{::schemas::common::Side::SELL, "SELL"},
+                };
+            };
+
+            template <>
+            struct Reflect<::schemas::common::Money>
+            {
+                static constexpr std::string_view name = "Money";
+                static constexpr std::string_view tag = "schemas.common.Money";
+                static constexpr bool shares = false;
+                static constexpr std::tuple fields{
+                    Field{"amount", &::schemas::common::Money::amount, false},
+                    Field{"currency", &::schemas::common::Money::currency, true},
+                };
+            };
+
+            template <>
+            struct Reflect<::schemas::common::Party>
+            {
+                static constexpr std::string_view name = "Party";
+                static constexpr std::string_view tag = "party.v1";
+                static constexpr bool shares = false;
+                static constexpr std::tuple fields{
+                    Field{"name", &::schemas::common::Party::name, false},
+                    Field{"lei", &::schemas::common::Party::lei, true},
+                    Field{"rating", &::schemas::common::Party::rating, true},
+                };
+            };
+
+            template <>
+            struct Reflect<::schemas::common::Fund>
+            {
+                static constexpr std::string_view name = "Fund";
+                static constexpr std::string_view tag = "schemas.common.Fund";
+                static constexpr bool shares = false;
+                static constexpr std::tuple fields{
+                    Field{"name", &::schemas::common::Fund::name, false},
+                    Field{"lei", &::schemas::common::Fund::lei, true},
+                    Field{"rating", &::schemas::common::Fund::rating, true},
+                    Field{"manager", &::schemas::common::Fund::manager, true},
+                };
+            };
+        } // namespace dataclass_native
         """
     )
 
@@ -89,7 +156,8 @@ def test_trades(headers):
     for expected in [
         '#include "dataclass_native/types.hpp"',
         '#include "schemas/common.hpp"',
-        "std::variant<Cash, Bond> instrument{};",
+        # A type of its own, as it is serialised with a tag
+        "dataclass_native::DiscriminatedUnion<Cash, Bond> instrument{};",
         (
             "std::variant<dataclass_native::Shared<::schemas::common::Party>, "
             "dataclass_native::Shared<::schemas::common::Fund>> counterparty{};"
@@ -119,6 +187,9 @@ def test_trades(headers):
         "dataclass_native::TimeDelta settle_lag = dataclass_native::TimeDelta{172800000000};",
         "std::optional<dataclass_native::Shared<::schemas::common::Party>> broker = std::nullopt;",
         "float coupon = 0.05f;",
+        # As it holds Shared values, and the name of a field is that it has in Python
+        "static constexpr bool shares = true;",
+        'Field{"counterparty", &::schemas::trades::Trade::counterparty, false},',
     ]:
         assert expected in header, expected
 
@@ -135,9 +206,9 @@ def test_tree(headers):
     )
     assert "std::vector<Node> children = std::vector<Node>{};" in header
     assert (
-        "std::variant<dataclass_native::Indirect<Expr>, dataclass_native::Indirect<Leaf>> left{};"
-        in header
-    )
+        "dataclass_native::DiscriminatedUnion<dataclass_native::Indirect<Expr>, "
+        "dataclass_native::Indirect<Leaf>> left{};"
+    ) in header
     assert "dataclass_native::Indirect<Expr> expr{};" in header
 
 
@@ -241,17 +312,17 @@ int main()
 """
 
 
-@pytest.mark.skipif(shutil.which("c++") is None, reason="No C++ compiler")
-def test_headers_compile_and_run(tmp_path, headers):
+def _run(tmp_path: Path, headers: dict[str, str], program: str, *arguments: str) -> str:
+    """What a C++ program prints, compiled with the headers"""
     for relative, contents in headers.items():
         path = tmp_path / "include" / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(contents)
+        path.write_text(contents, encoding="utf-8")
 
     source = tmp_path / "main.cpp"
-    source.write_text(_PROGRAM)
+    source.write_text(program, encoding="utf-8")
     binary = tmp_path / "main"
-    subprocess.run(
+    compiled = subprocess.run(
         [
             "c++",
             "-std=c++20",
@@ -266,12 +337,216 @@ def test_headers_compile_and_run(tmp_path, headers):
             "-o",
             str(binary),
         ],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
-    result = subprocess.run([str(binary)], check=True, capture_output=True, text=True)
-    assert result.stdout.strip() == "ok"
+    assert compiled.returncode == 0, compiled.stderr
+    result = subprocess.run(
+        [str(binary), *arguments], check=False, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+needs_compiler = pytest.mark.skipif(
+    shutil.which("c++") is None, reason="No C++ compiler"
+)
+
+
+@needs_compiler
+def test_headers_compile_and_run(tmp_path, headers):
+    assert _run(tmp_path, headers, _PROGRAM).strip() == "ok"
+
+
+_MSGPACK_PROGRAM = """
+#include <cassert>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <string>
+
+#include "dataclass_native/msgpack.hpp"
+
+#include "schemas/kinds.hpp"
+#include "schemas/sub/inner.hpp"
+#include "schemas/trades.hpp"
+#include "schemas/tree.hpp"
+
+using namespace schemas;
+using dataclass_native::Bytes;
+using dataclass_native::Shared;
+using dataclass_native::msgpack::Error;
+using dataclass_native::msgpack::from_msgpack;
+using dataclass_native::msgpack::to_msgpack;
+
+// What Python wrote, which is read and must then be written as it was
+template <class T>
+T read(const std::string& directory, const char* name)
+{
+    std::ifstream file(directory + "/" + name, std::ios::binary);
+    const Bytes written{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+    assert(!written.empty());
+    T value = from_msgpack<T>(written);
+    if (to_msgpack(value) != written)
+    {
+        std::cerr << name << " is not written as it was" << std::endl;
+        std::exit(1);
+    }
+    return value;
+}
+
+template <class T>
+bool rejects(const Bytes& data, const std::string& message)
+{
+    try
+    {
+        from_msgpack<T>(data);
+    }
+    catch (const Error& e)
+    {
+        if (std::string(e.what()).find(message) != std::string::npos)
+            return true;
+        std::cerr << e.what() << std::endl;
+    }
+    return false;
+}
+
+int main(int, char** argv)
+{
+    const std::string directory = argv[1];
+
+    const auto trade = read<trades::Trade>(directory, "trade");
+    assert(trade.id == 1 && trade.side == common::Side::SELL && trade.flags == 255);
+    assert(std::get<trades::Bond>(trade.instrument) == (trades::Bond{.isin = "XS1", .coupon = 0.5f}));
+    assert(std::get<Shared<common::Fund>>(trade.counterparty)->manager == "Ann");
+    assert(trade.limits.at(common::Currency::GBP) == 2.0 && trade.limits.size() == 2);
+    assert(std::get<std::int64_t>(*trade.note) == 7);
+    assert(trade.executed.time_since_epoch() == std::chrono::microseconds{-999'995});
+    assert(trade.payload.size() == 256 && trade.payload[255] == 255);
+    assert(trade.tags[2] == "caf\\u00e9");
+    // What was shared still is, and what was not is not
+    assert(trade.broker->ptr() == trade.parties[0].ptr() && trade.parties[0].ptr() == trade.parties[1].ptr());
+    assert(trade.parties[2] == trade.parties[0] && trade.parties[2].ptr() != trade.parties[0].ptr());
+
+    const auto all = read<std::vector<trades::Trade>>(directory, "trades");
+    assert(all.size() == 2 && all[0] == trade && all[1].id == 2);
+    assert(all[0].broker->ptr() == std::get<Shared<common::Party>>(all[1].counterparty).ptr());
+
+    const auto kinds = read<kinds::Kinds>(directory, "kinds");
+    assert(kinds.octets == (Bytes{0, 255}) && std::get<double>(kinds.number) == 1.5);
+    assert(kinds.sides.size() == 2 && kinds.by_name.at("b").size() == 1);
+    assert(std::get<common::Side>(kinds.tagged) == common::Side::SELL);
+    assert(std::get<1>(*kinds.container).at("m").amount == 1.0);
+    assert(std::get<std::int64_t>(read<kinds::Kinds>(directory, "defaults").tagged) == 0);
+
+    const auto node = read<tree::Node>(directory, "node");
+    assert((*node.next)->value == 2 && node.children[0].children[0].value == 4);
+    const auto expr = read<tree::Expr>(directory, "expr");
+    assert((*std::get<1>(*expr.right)).value == 1.0);
+    assert(read<sub::inner::Order>(directory, "order").new_);
+
+    // A field which is not written takes its default, and one which is not a field is ignored
+    const Bytes money{0x82, 0xA5, 'a', 'd', 'd', 'e', 'd', 0x91, 0x01, 0xA6, 'a', 'm', 'o', 'u', 'n', 't', 0xCA,
+                      0x40, 0x00, 0x00, 0x00};
+    assert(from_msgpack<common::Money>(money) == (common::Money{.amount = 2.0}));
+
+    assert(rejects<common::Money>({0x80}, "Money cannot be read: no amount"));
+    assert(rejects<common::Money>({0x90}, "The data is not a Money, as written"));
+    assert(rejects<common::Money>({0x81, 0xA6, 'a', 'm', 'o', 'u', 'n', 't', 0x01}, "Money.amount cannot be read"));
+    assert(rejects<common::Money>({0x81, 0xA6, 'a', 'm'}, "msgpack data is truncated"));
+    assert(rejects<std::int64_t>({0x01, 0x02}, "msgpack data has more than one value"));
+    assert(rejects<std::string>({0xA1, 0xFF}, "msgpack data has a str which is not UTF-8"));
+    assert(rejects<std::int64_t>({0xC1}, "msgpack data has the unused byte 0xc1"));
+    assert(rejects<std::uint8_t>({0xCD, 0x01, 0x00}, "The data is not of the type read"));
+    assert(rejects<std::vector<std::int64_t>>({0xDD, 0xFF, 0xFF, 0xFF, 0xFF}, "msgpack data is truncated"));
+    // Too deeply nested: in what is read, and in what is ignored
+    Bytes nodes;
+    for (int depth = 0; depth != 200; ++depth)
+        nodes.insert(nodes.end(), {0x81, 0xA8, 'c', 'h', 'i', 'l', 'd', 'r', 'e', 'n', 0x91});
+    assert(rejects<tree::Node>(nodes, "msgpack data is too deeply nested"));
+    Bytes ignored{0x81, 0xA1, 'x'};
+    ignored.insert(ignored.end(), 1000, 0x91);
+    assert(rejects<common::Money>(ignored, "msgpack data is too deeply nested"));
+    using Flags = std::map<std::int64_t, bool>;
+    assert(rejects<Flags>({0x82, 0x01, 0xC2, 0x01, 0xC3}, "a map with a key twice"));
+
+    std::cout << "ok" << std::endl;
+    return 0;
+}
+"""
+
+
+@needs_compiler
+def test_msgpack_as_python_writes_it(tmp_path):
+    """The C++ reads what Python writes, and writes the same bytes"""
+    import datetime as dt
+    from dataclasses import replace
+
+    from schemas.common import Currency, Fund, Money, Party, Side
+    from schemas.kinds import Kinds
+    from schemas.sub.inner import Order
+    from schemas.trades import Bond, Cash, Trade
+    from schemas.tree import Expr, Leaf, Node, Wrapper
+
+    from dataclass_native import to_msgpack
+
+    party = Party("Acme", lei="LEI1", rating=3)
+    trade = Trade(
+        id=1,
+        side=Side.SELL,
+        instrument=Bond("XS1", coupon=0.5),
+        counterparty=Fund("Fund", manager="Ann"),
+        quantity=2.5,
+        limits={Currency.GBP: 2.0, Currency.USD: 1.0},
+        payload=bytes(range(256)),
+        note=7,
+        executed=dt.datetime(1969, 12, 31, 23, 59, 59, 5, tzinfo=dt.UTC),
+        settle_lag=dt.timedelta(days=-1, microseconds=1),
+        broker=party,
+        parties=(party, party, replace(party)),
+    )
+    second = replace(
+        trade,
+        id=2,
+        instrument=Cash(Money(-1e300, Currency.GBP)),
+        counterparty=party,
+        tags=("x" * 300,),
+        labels=frozenset(),
+        note=None,
+        executed=dt.datetime(2600, 1, 1, tzinfo=dt.UTC),
+        broker=None,
+    )
+    leaf = Leaf(1.0, parent=Wrapper(Expr("neg", Leaf(2.0))))
+    written = {
+        "trade": to_msgpack(trade),
+        "trades": to_msgpack((trade, second), tuple[Trade, ...]),
+        "kinds": to_msgpack(
+            Kinds(
+                octets=(0, 255),
+                number=1.5,
+                nested=((Money(1.0),), (), (Money(2.0), Money(3.0, Currency.GBP))),
+                by_name={"b": (Side.SELL,), "a": (), "é": (Side.BUY, Side.BUY)},
+                sides=frozenset({Side.SELL, Side.BUY}),
+                pair=(-(2**63), Money(4.0)),
+                container={"m": Money(1.0)},
+                tagged=Side.SELL,
+                blobs=(b"", b"\x00"),
+            )
+        ),
+        "defaults": to_msgpack(Kinds()),
+        "node": to_msgpack(
+            Node(1, next=Node(2), children=(Node(3, children=(Node(4),)), Node(5)))
+        ),
+        "expr": to_msgpack(Expr("add", Expr("mul", leaf, Leaf(3.0)), leaf)),
+        "order": to_msgpack(Order(default=-33, new=True, total=Money(65536.5))),
+    }
+    for name, data in written.items():
+        (tmp_path / name).write_bytes(data)
+
+    modules = [*SCHEMA_MODULES, "schemas.kinds"]
+    headers = cpp.generate(build_schema(modules))
+    assert _run(tmp_path, headers, _MSGPACK_PROGRAM, str(tmp_path)).strip() == "ok"
 
 
 def test_include_dir():

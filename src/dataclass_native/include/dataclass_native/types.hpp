@@ -7,6 +7,7 @@
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace dataclass_native
@@ -157,5 +158,31 @@ namespace dataclass_native
 
     private:
         std::unique_ptr<T> ptr_;
+    };
+
+    // DiscriminatedUnion[A, B]: a std::variant, which is serialised with a tag naming its member's type. A type of
+    // its own, as that is all which tells it from a plain union of the same members.
+    template <class... Ts>
+    class DiscriminatedUnion : public std::variant<Ts...>
+    {
+    public:
+        using std::variant<Ts...>::variant;
+        using std::variant<Ts...>::operator=;
+
+        DiscriminatedUnion() = default;
+
+        explicit DiscriminatedUnion(std::variant<Ts...> value) : std::variant<Ts...>(std::move(value))
+        {
+        }
+
+        const std::variant<Ts...>& as_variant() const
+        {
+            return *this;
+        }
+
+        friend bool operator==(const DiscriminatedUnion& lhs, const DiscriminatedUnion& rhs)
+        {
+            return lhs.as_variant() == rhs.as_variant();
+        }
     };
 } // namespace dataclass_native

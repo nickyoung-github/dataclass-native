@@ -32,10 +32,12 @@ NB_MODULE({{ extension }}, m)
 {% for struct in structs %}
 
     nanobind::class_<{{ struct.type }}>(m, "{{ struct.name }}")
-        .def(nanobind::init<>()){{ ";" if not struct.fields }}
+        .def(nanobind::init<>())
 {% for field in struct.fields %}
-        .def_rw("{{ field.name }}", &{{ struct.type }}::{{ field.identifier }}){{ ";" if loop.last }}
+        .def_rw("{{ field.name }}", &{{ struct.type }}::{{ field.identifier }})
 {% endfor %}
+        .def("__msgpack__", &dataclass_native::python::to_msgpack<{{ struct.type }}>)
+        .def_static("__from_msgpack__", &dataclass_native::python::from_msgpack<{{ struct.type }}>);
     schema["{{ struct.name }}"] = "{{ struct.hash }}";
 {% endfor %}
 

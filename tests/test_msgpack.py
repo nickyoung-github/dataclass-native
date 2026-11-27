@@ -12,7 +12,7 @@ from typing import Any
 import msgpack
 import pytest
 from schemas.common import Currency, Fund, Money, Party, Side
-from schemas.kinds import Kinds
+from schemas.kinds import Kinds, Link
 from schemas.trades import Bond, Cash, Trade
 from schemas.tree import Expr, Leaf, Node, Wrapper
 from schemas.validated import Account, Holder
@@ -27,6 +27,7 @@ from dataclass_native import (
     to_msgpack,
 )
 from dataclass_native._msgpack import Ext, unpack
+from dataclass_native._wire import read, write
 
 UTC = dt.UTC
 PARIS = dt.timezone(dt.timedelta(hours=1))
@@ -45,11 +46,14 @@ def _ref(table: int, row: int) -> msgpack.ExtType:
 
 def _round_trip(value: Any, tp: Any = None) -> Any:
     data = to_msgpack(value, tp)
-    read = from_msgpack(tp or type(value), data)
-    assert read == value
+    result = from_msgpack(tp or type(value), data)
+    assert result == value
     # What is written depends only on the value
-    assert to_msgpack(read, tp) == data
-    return read
+    assert to_msgpack(result, tp) == data
+    # The implementation in Python, which that used may not be, writes and reads the same
+    assert write(value, tp) == data
+    assert read(tp or type(value), data) == value
+    return result
 
 
 @pytest.mark.parametrize(
@@ -254,24 +258,28 @@ def test_shared_objects_sharing_others():
     assert read[0].counterparty is read[0].broker is read[2]
 
 
-def test_object_sharing_itself(make_module):
-    module = make_module(
-        """
-        from dataclasses import dataclass
-        from dataclass_native import Shared, native
+def test_shared_objects_of_their_own_class():
+    last = Link("c")
+    first = Link("a", Link("b", last))
+    result = _round_trip((first, last), tuple[Link, Shared[Link]])
+    assert result[0].next.next is result[1]
+    # In the order met: each takes its row before what it shares is written
+    assert unpack(to_msgpack(first))["shared"] == [
+        [
+            "schemas.kinds.Link",
+            [{"name": "b", "next": _ref(0, 1)}, {"name": "c", "next": None}],
+        ]
+    ]
 
-        @native
-        @dataclass(frozen=True)
-        class Link:
-            next: "Shared[Link] | None" = None
-        """
-    )
-    link: Any = module.Link
-    rows = [{"next": _ref(0, 1)}, {"next": _ref(0, 0)}]
-    data = _packed({"root": _ref(0, 0), "shared": [[f"{module.__name__}.Link", rows]]})
+
+def test_object_sharing_itself():
+    rows = [{"name": "a", "next": _ref(0, 1)}, {"name": "b", "next": _ref(0, 0)}]
+    data = _packed({"root": _ref(0, 0), "shared": [["schemas.kinds.Link", rows]]})
     # Which no object written could
     with pytest.raises(ValueError, match="Link.next cannot be read"):
-        from_msgpack(Shared[link], data)
+        from_msgpack(Shared[Link], data)
+    with pytest.raises(ValueError, match="Link.next cannot be read"):
+        from_msgpack(Link, data.replace(_packed(_ref(0, 0)), _packed(rows[0]), 1))
 
 
 def test_recursive():
@@ -299,12 +307,17 @@ def test_recursive():
 
 def test_reader_allows_for_other_versions():
     # A field which is not written takes its default, and one which is not a field is ignored
-    assert from_msgpack(Money, _packed({"added": [1], "amount": 2.0})) == Money(2.0)
+    assert from_msgpack(Money, _packed({"added": [1], 2: {}, "amount": 2.0})) == Money(
+        2.0
+    )
     assert from_msgpack(Party, _packed({"rating": 1, "name": "p"})) == Party(
         "p", rating=1
     )
     with pytest.raises(ValueError, match="Money cannot be read: .*amount"):
         from_msgpack(Money, _packed({"currency": "USD"}))
+    # The tag of a discriminated union may follow its value
+    tagged = {"tagged": {"v": {"amount": 1.0}, "t": "schemas.common.Money"}}
+    assert from_msgpack(Kinds, _packed(tagged)) == Kinds(tagged=Money(1.0))
 
 
 @pytest.mark.parametrize(
@@ -332,9 +345,29 @@ def test_reader_allows_for_other_versions():
         (tuple[int, str], _packed([1]), "The data is not a tuple"),
         (tuple[UInt8, ...], _packed([1]), "The data is not a tuple"),
         (Money, _packed([]), "The data is not a Money"),
-        (Money, _packed({"amount": "1"}), "Money.amount cannot be read from '1'"),
+        (Money, _packed({"amount": "1"}), "Money.amount cannot be read"),
         (Party, _packed({"name": "p", "rating": 2**31}), "Party.rating cannot be read"),
         (int | str, _packed(1.5), "The data is not a int | str"),
+        # Of a struct, which a bound class reads natively
+        (Money, _packed({"amount": 1.0})[:-1], "msgpack data is truncated"),
+        (
+            Money,
+            _packed({"amount": 1.0}) + b"\x00",
+            "msgpack data has more than one value",
+        ),
+        (Party, b"\x81\xa4name\xa1\xff", "msgpack data has a str which is not UTF-8"),
+        (Money, b"\x82" + 2 * _packed({"amount": 1.0})[1:], "twice"),
+        (Money, b"\x81\xa1x" + 2000 * b"\x91", "msgpack data is too deeply nested"),
+        (Kinds, _packed({"octets": [1]}), "Kinds.octets cannot be read"),
+        (Kinds, _packed({"sides": ["HOLD"]}), "Kinds.sides cannot be read"),
+        (Kinds, _packed({"pair": [1]}), "Kinds.pair cannot be read"),
+        (Kinds, _packed({"number": None}), "Kinds.number cannot be read"),
+        (Link, _packed({"name": "a"}), "The data is not a Link"),
+        (
+            Link,
+            _packed({"root": {"name": "a", "next": _ref(0, 0)}, "shared": []}),
+            "Link.next cannot be read",
+        ),
         (
             Kinds,
             _packed({"tagged": {"t": "str", "v": "x"}}),
