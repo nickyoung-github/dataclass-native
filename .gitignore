@@ -165,7 +165,7 @@ cython_debug/
 .vscode/
 
 # setuptools-scm
-src/pypersistable/_version.py
+src/dataclass_native/_version.py
 
 # Generated C++ in tests and builds
 generated/

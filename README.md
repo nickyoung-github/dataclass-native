@@ -148,3 +148,5 @@ uv sync
 uv run pytest   # Builds the extensions of tests/schemas with CMake, in build/tests
 uv run ruff check . && uv run pyright
 ```
+
+The version is that of the latest tag. Pushing a tag such as `v1.2.3` publishes that version to PyPI.
