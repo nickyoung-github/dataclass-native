@@ -161,6 +161,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 .idea/
 
+# VS Code: its settings hold paths of this machine
+.vscode/
+
 # setuptools-scm
 src/pypersistable/_version.py
 

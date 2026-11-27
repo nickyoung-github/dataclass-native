@@ -141,6 +141,16 @@ def test_tree(headers):
     assert "dataclass_native::Indirect<Expr> expr{};" in header
 
 
+def test_pydantic_dataclass():
+    header = cpp.generate(build_schema(["schemas.validated"]))["schemas/validated.hpp"]
+    # The default of its pydantic Field()
+    assert "double ratio = 0.5;" in header
+    assert (
+        "std::optional<dataclass_native::Indirect<Account>> parent = std::nullopt;"
+        in header
+    )
+
+
 def test_keywords(headers):
     header = headers["schemas/sub/inner.hpp"]
     assert "namespace schemas::sub::inner" in header
@@ -169,7 +179,7 @@ def test_cli_writes_only_changes(tmp_path, capsys):
         main(["generate", "cpp", "--package", "schemas", "--out", str(tmp_path)]) == 0
     )
     written = capsys.readouterr().out.split()
-    assert len(written) == 4
+    assert len(written) == 6
 
     assert (
         main(["generate", "cpp", "--package", "schemas", "--out", str(tmp_path)]) == 0

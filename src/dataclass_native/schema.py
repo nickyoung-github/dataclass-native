@@ -5,8 +5,9 @@ generates code. Built by dataclass_native.introspect.
 
 import datetime as dt
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum as PyEnum
+from hashlib import sha256
 from typing import Any
 
 
@@ -228,6 +229,30 @@ class Schema:
 
     def enum(self, ref: EnumRef) -> Enum:
         return next(e for e in self.modules[ref.module].enums if e.name == ref.name)
+
+
+def _signature(t: Any) -> str:
+    """A type as text, the same whether or not introspection has made its recursive references Indirect"""
+    if isinstance(t, Indirect):
+        t = t.target
+    if isinstance(t, tuple):
+        return f"({', '.join(map(_signature, t))})"
+    if not is_dataclass(t):
+        return repr(t)
+    args = ", ".join(_signature(getattr(t, f.name)) for f in fields(t) if f.repr)
+    return f"{type(t).__name__}({args})"
+
+
+def schema_hash(item: Struct | Enum) -> str:
+    """
+    Identifies what code generated for a struct or enum depends on, so that code generated from another version of
+    it can be told. Not a struct's defaults: Python sets every field of the objects it makes
+    """
+    if isinstance(item, Struct):
+        lines = [f"{f.name}: {_signature(f.type)}" for f in item.fields]
+    else:
+        lines = [f"{m.name} = {m.value}" for m in item.members]
+    return sha256("\n".join([item.tag, *lines]).encode()).hexdigest()[:16]
 
 
 def is_key(t: Type) -> bool:

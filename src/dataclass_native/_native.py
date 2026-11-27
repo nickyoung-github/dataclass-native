@@ -5,7 +5,7 @@ from dataclasses import dataclass, is_dataclass
 from typing import Any, overload
 from weakref import WeakKeyDictionary
 
-from ._mode import ENV_VAR, Mode, _fix_mode
+from ._mode import Mode, _fix_mode
 
 
 class NativeBindingError(RuntimeError):
@@ -51,6 +51,12 @@ def native(cls: Any = None, /, *, tag: str | None = None) -> Any:
     return decorate if cls is None else decorate(cls)
 
 
+def extension_name(module: str) -> str:
+    """The extension module holding the native classes of a schema module: pkg._mod_native for pkg.mod"""
+    package, _, name = module.rpartition(".")
+    return f"{package}{'.' if package else ''}_{name}_native"
+
+
 def is_native(cls: type) -> bool:
     """Whether the class itself, not just a base, is decorated with @native"""
     return cls in _registry
@@ -64,6 +70,11 @@ def native_info(cls: type) -> NativeInfo:
 
 
 def _validate(cls: Any):
+    if hasattr(cls, "model_fields"):
+        raise TypeError(
+            f"{cls.__qualname__}: pydantic models are not supported: use pydantic.dataclasses.dataclass"
+        )
+
     if not isinstance(cls, type) or not is_dataclass(cls):
         raise TypeError(
             f"@native must be applied to a dataclass, above @dataclass, not to {cls!r}"
@@ -74,23 +85,47 @@ def _validate(cls: Any):
             f"{cls.__qualname__}: only frozen dataclasses are supported: use @dataclass(frozen=True)"
         )
 
+    if "__slots__" in vars(cls):
+        raise TypeError(
+            f"{cls.__qualname__}: dataclasses with slots are not supported, as fields are stored natively"
+        )
+
     if getattr(cls, "__type_params__", ()) or getattr(cls, "__parameters__", ()):
         raise TypeError(f"{cls.__qualname__}: generic dataclasses are not supported")
 
 
 def _install_binding(cls: type, required: bool):
+    # Once bound: the native class, or None if it has none (mixed mode)
+    native: list[type | None] = []
+
+    def bound() -> type | None:
+        if not native:
+            # Lazily, so that schema modules import without their extension, and before all their classes exist
+            from ._runtime import bind
+
+            native.append(bind(cls, required))
+        return native[0]
+
     def __new__(klass: type, *_args: Any, **_kwargs: Any) -> Any:
         if not is_native(klass):
             raise TypeError(
                 f"{klass.__qualname__} derives from @native {cls.__qualname__}, so must be decorated with @native"
             )
 
-        # Binding to the generated extension is not implemented yet, so it is always missing
-        if required:
-            raise NativeBindingError(
-                f"No native binding is available for {klass.__module__}.{klass.__qualname__}: build its extension, "
-                f"or set {ENV_VAR} to {Mode.MIXED.value} or {Mode.PURE.value}"
+        self = object.__new__(klass)
+        if (native_class := bound()) is not None:
+            self.__dict__["__native__"] = native_class()
+        return self
+
+    def _from_native(klass: type, handle: Any) -> Any:
+        """An instance holding the given native object, e.g. one returned by C++, without copying it"""
+        if klass is not cls or type(handle) is not bound():
+            raise TypeError(
+                f"{handle!r} is not the native object of a {klass.__qualname__}"
             )
-        return object.__new__(klass)
+        self = object.__new__(klass)
+        self.__dict__["__native__"] = handle
+        return self
 
     cls.__new__ = staticmethod(__new__)  # pyright: ignore[reportAttributeAccessIssue]
+    cls._from_native = classmethod(_from_native)  # pyright: ignore[reportAttributeAccessIssue]
