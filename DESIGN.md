@@ -212,11 +212,27 @@ extension module `pkg._mod_native`, which binds the module's types with nanobind
   `tuple`), and that a struct is exactly of its class.
 - `__reduce__` and `__setstate__` are defined, as the default copy and pickle would copy the handle. They give what
   a plain dataclass gives, `(cls,)` and `{field: value}`, so a pickle made in one mode loads in any.
-- `cls._from_native(handle)` wraps a native object without copying, e.g. one returned by C++.
+- `cls._from_native(handle)` wraps a native object without copying. `@native_function` is the way to call C++.
 - A weak map from a shared handle to its Python object means a `Shared` field gives back the object it was given:
   `trade.counterparty is party`.
 - An instance without a handle keeps its fields in its `__dict__`, which the descriptors then use. That is an
   instance of an unbound subclass of a bound class, in `mixed` mode.
+
+### Functions
+
+`@native_function("pkg._ext")` marks a Python function as implemented by the function of its name in a hand-written
+nanobind extension, so that C++ written against the generated structs is called with, and returns, `@native` objects.
+
+- The Python signature is the declaration: type checkers and callers see an ordinary function. Its annotations are
+  resolved as a field's are, and its arguments and result are converted by the converters fields use. So a struct is
+  passed as its handle and a returned struct is wrapped, neither copied, and the checks are the same.
+- It is bound when first called, as a class is when first instantiated: its module imports without the extension,
+  which also lets code generation import it. Binding it binds the classes its signature uses.
+- The body is the Python implementation. `pure` mode returns the function unchanged. `mixed` mode calls the body
+  if the extension, the function, or the binding of a class it uses is missing, and `strict` mode then raises.
+  Running the same tests in `pure` and `strict` modes therefore compares the two implementations.
+- Only positional parameters are supported, each annotated, as is what it returns.
+- Nothing checks that the C++ function's signature matches the Python one, until a call which nanobind rejects.
 
 ### pydantic dataclasses
 
@@ -253,7 +269,8 @@ what an object is made from, before the native class checks it.
 ## Phases
 
 1. **Done:** schema model, introspection, C++ header generation, `@native` with its modes, CLI.
-2. **Done:** nanobind extensions, the descriptor runtime, the schema-hash check, and the CMake package.
+2. **Done:** nanobind extensions, the descriptor runtime, the schema-hash check, the CMake package, and
+   `@native_function`.
 3. The written wire format specification, the pure-Python msgpack codec, `reflect<T>` and the C++ msgpack driver.
 4. Arrow via nanoarrow, Parquet via pyarrow, optional Arrow C++ Parquet.
 5. Rust: structs with serde, PyO3 bindings, Arrow.

@@ -188,6 +188,27 @@ def test_class_is_bound_only_if_those_it_uses_are(built):
     ]
 
 
+def test_function_is_native_only_if_the_classes_it_uses_are_bound(built):
+    out = _run(
+        built,
+        Mode.MIXED,
+        """
+        from schemas import _common_native
+
+        del _common_native.__schema__["Money"]
+
+        from schemas.common import Money, Party
+        from schemas.functions import implementation, renamed, total
+
+        # Its Python implementation, as Money is plain
+        print(implementation(), vars(total((Money(1.0), Money(2.0)))), list(vars(renamed(Party("p")))))
+        """,
+    )
+    assert out.splitlines() == [
+        "native {'amount': 3.0, 'currency': <Currency.USD: 1>} ['__native__']"
+    ]
+
+
 def test_pickles_load_in_any_mode(built, tmp_path):
     script = """
         import pickle
