@@ -1,6 +1,8 @@
 """
 dataclass-native generate cpp --package my_schemas --out generated/include
+dataclass-native generate nanobind --package my_schemas --out generated
 dataclass-native include-dir
+dataclass-native cmake-dir
 """
 
 import pkgutil
@@ -10,6 +12,7 @@ from importlib import import_module
 from pathlib import Path
 
 from ._mode import Mode, set_mode
+from ._native import extension_name
 
 
 def include_dir() -> Path:
@@ -17,12 +20,21 @@ def include_dir() -> Path:
     return Path(__file__).parent / "include"
 
 
+def cmake_dir() -> Path:
+    """The directory of dataclass_native's CMake package, which adds the extensions of schema modules to a build"""
+    return Path(__file__).parent / "cmake"
+
+
 def _import_package(package: str) -> list[str]:
     module = import_module(package)
+    extensions: set[str] = set()
     for info in pkgutil.walk_packages(
         getattr(module, "__path__", []), prefix=f"{package}."
     ):
-        import_module(info.name)
+        # Not the extensions of schema modules, built by an earlier run
+        if info.name not in extensions:
+            import_module(info.name)
+            extensions.add(extension_name(info.name))
 
     from .introspect import loaded_modules
 
@@ -47,7 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
 
     generate = commands.add_parser("generate", help="Generate code from schema modules")
-    generate.add_argument("language", choices=["cpp"])
+    generate.add_argument(
+        "language",
+        choices=["cpp", "nanobind"],
+        help="cpp: headers. nanobind: also the sources of the Python extension modules binding them",
+    )
     generate.add_argument(
         "-m",
         "--module",
@@ -69,11 +85,14 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser(
         "include-dir", help="Print the directory of dataclass_native's C++ headers"
     )
+    commands.add_parser(
+        "cmake-dir", help="Print the directory of dataclass_native's CMake package"
+    )
 
     args = parser.parse_args(argv)
 
-    if args.command == "include-dir":
-        print(include_dir())
+    if args.command != "generate":
+        print(include_dir() if args.command == "include-dir" else cmake_dir())
         return 0
 
     if not args.module and not args.package:
@@ -82,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
     # Schema modules are imported to be described, not bound
     set_mode(Mode.PURE)
 
-    from .backends import cpp
+    from .backends import bindings, cpp
     from .introspect import build_schema
     from .schema import SchemaError
 
@@ -90,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
         modules = [*args.module, *(m for p in args.package for m in _import_package(p))]
         schema = build_schema(modules)
         files = cpp.generate(schema)
+        if args.language == "nanobind":
+            files |= bindings.generate(schema)
     except SchemaError as e:
         print(f"dataclass-native: {e}", file=sys.stderr)
         return 1

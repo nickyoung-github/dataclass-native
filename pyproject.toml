@@ -19,7 +19,9 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 
-dependencies = []
+dependencies = [
+    "jinja2>=3.1.6",
+]
 
 [project.scripts]
 dataclass-native = "dataclass_native.cli:main"
@@ -32,11 +34,19 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-dataclass_native = ["py.typed", "include/dataclass_native/*.hpp"]
+dataclass_native = [
+    "py.typed",
+    "include/dataclass_native/*.hpp",
+    "backends/templates/*.j2",
+    "cmake/*.cmake",
+]
 
 [dependency-groups]
 dev = [
+    "cmake>=4.4.5",
+    "nanobind>=3.1.0",
     "pre-commit>=4.7.0",
+    "pydantic>=2.14.4",
     "pyright>=1.1.414",
     "pytest",
     "pytest-cov",
@@ -58,6 +68,8 @@ pythonpath = ["tests"]
 [tool.coverage.run]
 source = ["dataclass_native"]
 branch = true
+# The modes other than pure are tested in processes of their own
+patch = ["subprocess"]
 
 [tool.coverage.report]
 show_missing = true

@@ -58,6 +58,14 @@ def build_schema(modules: Iterable[str | ModuleType]) -> s.Schema:
     return _Builder().build(modules)
 
 
+def describe(cls: type) -> s.Struct | s.Enum:
+    """
+    A @native class or an enum, alone. As the rest of its module is not considered, a struct's recursive references
+    are not Indirect, and it has no defaults
+    """
+    return _Builder().describe(cls)
+
+
 def _module_name(module: str | ModuleType) -> str:
     return module.__name__ if isinstance(module, ModuleType) else module
 
@@ -110,6 +118,21 @@ class _Builder:
         schema = s.Schema(modules_)
         _check_defaults(schema)
         return schema
+
+    def describe(self, cls: type) -> s.Struct | s.Enum:
+        _check_top_level(cls)
+        if issubclass(cls, Enum):
+            self.__add_enum(cls)
+            return self.__enums[cls]
+
+        self.__add_struct(cls)
+        return s.Struct(
+            module=cls.__module__,
+            name=cls.__name__,
+            tag=native_info(cls).tag,
+            fields=tuple(s.Field(name, t) for name, t, _ in self.__structs[cls].fields),
+            cls=cls,
+        )
 
     def __use_module(self, name: str):
         if name not in self.__modules:
@@ -415,7 +438,9 @@ class _Builder:
             tag=native_info(cls).tag,
             fields=tuple(
                 s.Field(
-                    name, _indirect(t, cycle), _default(f, f"{cls.__qualname__}.{name}")
+                    name,
+                    _indirect(t, cycle),
+                    _default(cls, f, f"{cls.__qualname__}.{name}"),
                 )
                 for name, t, f in raw.fields
             ),
@@ -514,11 +539,18 @@ def _indirect(t: s.Type, cycle: frozenset[type]) -> s.Type:
             return t
 
 
-def _default(f: Field, where: str) -> Any:
-    if f.default is not MISSING:
-        return f.default
+def _default(cls: type, f: Field, where: str) -> Any:
+    default, factory = f.default, f.default_factory
+    # Of a pydantic dataclass, a field's default may be a pydantic Field(), which has them
+    if info := getattr(cls, "__pydantic_fields__", {}).get(f.name):
+        factory = info.default_factory or MISSING
+        default = (
+            MISSING if info.is_required() or info.default_factory else info.default
+        )
 
-    factory = f.default_factory
+    if default is not MISSING:
+        return default
+
     if factory is MISSING:
         return s.NO_DEFAULT
 

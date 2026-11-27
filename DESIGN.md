@@ -16,14 +16,14 @@ to as "the old implementation".
 | Opt-in | The `@native` decorator, applied above `@dataclass` | It runs once the dataclass's fields are final, needs no metaclass, and so never conflicts with other metaclasses |
 | Polymorphism | None: use unions | Inheritance only reuses fields, which are copied into each native struct, so C++ and Rust match |
 | C++ bindings | nanobind | It is faster and smaller than pybind11, stores C++ objects inside the Python object, and makes Python enums |
-| pydantic | Not supported | `BaseModel` and pydantic's dataclass validation set `__dict__` directly, which bypasses the descriptors. It is possible we'll address this later but pydantic have not made it easy |
+| pydantic | Its dataclasses, not `BaseModel` | A pydantic dataclass is a stdlib dataclass which validates. Its validation sets `__dict__` directly, which bypasses the descriptors, so needs the handling described below. A `BaseModel` is not a dataclass: it has its own metaclass, storage and methods, and pydantic have not made it easy |
 | Serialisation | Our own drivers, using reflection generated from the schema | We know the schema at generation time, which opens up cross-language serialisation. |
 | msgpack structs | Maps keyed by field name | Readers can tolerate added or removed fields |
 
 ## Architecture
 
 ```
-schema modules (.py) ──introspect──▶ schema model ──backends──▶ C++ headers ──▶ nanobind bindings (phase 2)
+schema modules (.py) ──introspect──▶ schema model ──backends──▶ C++ headers ──▶ nanobind extensions
                                          │                   ──▶ Rust crate (phase 5)
                                          └──▶ runtime: @native descriptors, pure-Python codecs
 ```
@@ -31,7 +31,8 @@ schema modules (.py) ──introspect──▶ schema model ──backends──
 - `dataclass_native.schema` is the language-neutral schema model. Introspection does everything that must agree
   across languages: union rules, where recursion is broken, ordering, defaults, tags.
 - Each backend only renders the model. Language-specific concerns stay in the backend: keywords, how
-  defaults are written.
+  defaults are written. A backend works out what a file holds, and a Jinja template lays it out
+  (`backends/templates`).
 
 ## Modes
 
@@ -54,7 +55,8 @@ setters reject values of the wrong type or out of range, while a plain dataclass
 validates only the classes which are bound. A `pure-checked` mode, validating against the schema, may be added.
 
 A native struct cannot hold a plain dataclass, so in `mixed` mode a class is bound only if every class its fields
-use is bound (phase 2).
+use is bound. A binding which is there but was built from another version of its class raises in `mixed` mode too:
+it is wrong, not missing.
 
 ## Types
 
@@ -167,37 +169,91 @@ Identities are only valid within one write. Content-hash ids, for deduplication 
 **Rust.** serde, with `rmp_serde::to_vec_named` (structs as maps). Unions need a custom serialiser for the
 `{"t", "v"}` layout. Arrow is via arrow-rs; the result must be checked against the C++ output.
 
-## Python runtime (phase 2)
+## Python runtime
 
-- `@native` installs a `__new__` that creates the native object and stores its handle on the instance. It also
-  checks that every class in the hierarchy is decorated, since a subclass's fields would otherwise have no storage.
-- Each field becomes a data descriptor forwarding to the native member. The stock dataclass `__init__`, `__eq__`,
-  `__repr__`, `replace`, `fields` and `asdict` keep working. The frozen `__init__` uses `object.__setattr__`, which
-  still goes through data descriptors.
-- `__copy__`, `__deepcopy__` and `__reduce__` are defined, as the default copy would share the native handle.
-  Pickles use `(cls, (), {field: value})` in every mode, so they load in any.
+### Extensions
+
+`dataclass-native generate nanobind` writes the headers and, for each schema module `pkg.mod`, the source of the
+extension module `pkg._mod_native`, which binds the module's types with nanobind:
+
+- A native class per struct, default-constructed, with a property per field. A native enum per enum.
+- `dataclass_native/python.hpp` converts the types of `types.hpp`: `Bytes` and `bytes`, the dates and times,
+  `Shared<T>` (the Python object of its `T`, which it keeps alive, so sharing a value shares the object) and
+  `Indirect<T>` (as its `T`). The standard containers use nanobind's own conversions.
+- An extension imports those of the modules whose types it uses.
+- `__schema__` gives, by name, a hash of each type's schema: its tag, and its fields and their types, or its
+  members and their values. Not defaults, as Python sets every field of the objects it makes.
+
+### Building
+
+`find_package(dataclass_native CONFIG)`, with `dataclass_native_ROOT` from `dataclass-native cmake-dir`, provides
+`dataclass_native_add_extensions(PACKAGES ... MODULES ...)`:
+
+- It generates when CMake configures. The generator also writes `extensions.cmake`, listing the extensions and
+  the schema files, so that changing a schema file configures, and so generates, again.
+- It adds a nanobind module per extension, and installs each to its package's directory, which is where
+  scikit-build-core takes the contents of a wheel from. `LIBRARY_DIRECTORY` builds them in place instead.
+
+### Binding
+
+- `@native` installs a `__new__`, which creates the native object and stores it on the instance as `__native__`:
+  its handle. It also checks that the class is itself decorated, since a subclass has a native class of its own.
+- A class is bound when first instantiated, not when defined. Schema modules therefore import without their
+  extension, and a class's annotations may name classes defined after it. Binding finds the native class in
+  `pkg._mod_native`, compares the hash of the class as it now is with that it was built from, and binds the
+  classes its fields use.
+- Each field becomes a data descriptor, getting and setting the handle's member. The stock dataclass `__init__`,
+  `__eq__`, `__repr__`, `replace`, `fields` and `asdict` keep working: the frozen `__init__` uses
+  `object.__setattr__`, which goes through data descriptors.
+- The descriptor converts between Python's values and the extension's: a `@native` object and its handle, an enum's
+  member and the native enum's, `tuple` and `list`, `frozenset` and `set`, `Mapping` and `dict`. A struct which is
+  read is a view of the member, not a copy: it keeps the object holding it alive.
+- It also checks what nanobind would let through: that a container is of its exact type (a `list` is not a
+  `tuple`), and that a struct is exactly of its class.
+- `__reduce__` and `__setstate__` are defined, as the default copy and pickle would copy the handle. They give what
+  a plain dataclass gives, `(cls,)` and `{field: value}`, so a pickle made in one mode loads in any.
 - `cls._from_native(handle)` wraps a native object without copying, e.g. one returned by C++.
-- `Shared` fields keep a weak cache from native address to Python wrapper, so that `a.foo is f` holds.
-- The extension is looked up lazily, at first instantiation, so schema modules import without it.
-- Each native type carries a hash of its schema, checked when binding, to detect stale builds.
+- A weak map from a shared handle to its Python object means a `Shared` field gives back the object it was given:
+  `trade.counterparty is party`.
+- An instance without a handle keeps its fields in its `__dict__`, which the descriptors then use. That is an
+  instance of an unbound subclass of a bound class, in `mixed` mode.
+
+### pydantic dataclasses
+
+`@native` may be applied above `pydantic.dataclasses.dataclass(frozen=True)`. pydantic then validates and converts
+what an object is made from, before the native class checks it.
+
+- pydantic sets an instance's `__dict__` once it has validated its fields, which bypasses the descriptors and
+  discards the handle. So an instance of a bound class with no handle is given one, holding the fields in its
+  `__dict__`, when a field is first read or the instance is given to a native field.
+- The class's `__init__` does that as it returns, so that a value which pydantic accepts and the native class
+  does not, e.g. an int too large for its field, is rejected when the object is made. For the instances which
+  pydantic makes itself, such as those of a `TypeAdapter` or of a nested `dict`, it is rejected when a field is
+  first read.
+- A default given as a pydantic `Field()` is read from it.
 
 ## Limitations
 
-- A field read goes through a Python descriptor, the native getter and a conversion (about 100–200 ns, against
-  about 20 ns for a plain attribute). That suits messages, not hot loops. Generating the descriptors in C, or making
-  the Python class subclass the native type, could come later.
+- A field read goes through a Python descriptor, the native getter and a conversion: about 120 ns for a number
+  and 200–350 ns for an enum, struct or small container, against about 10–20 ns for a plain attribute. Constructing
+  an object is about five times slower. That suits messages, not hot loops. Generating the descriptors in C, or
+  making the Python class subclass the native type, could come later.
+- Reading a container converts all of it, each time, and a `Mapping` is read as a new `dict`.
+- A datetime is stored as an instant, so is read back in UTC, whatever its timezone was.
 - `vars(obj)` doesn't show the fields of a bound class.
+- Only classes at the top level of a module are bound, and not dataclasses with slots.
 - Free-threaded Python: native members have no locking.
 - Using these types from other extension modules requires the same nanobind ABI.
 - Generation imports the schema modules, so runs their code.
+- Built and tested with clang on macOS only. CMake generators with a directory per configuration (Visual Studio)
+  need `LIBRARY_DIRECTORY` to allow for it.
 - Mutable classes (later) bring back the problem of references versus copies: path-based proxies for nested values
   and containers, and `Shared` for real aliasing.
 
 ## Phases
 
-1. **Done:** schema model, introspection, C++ header generation, `@native` with its modes (no class has a
-   binding yet), CLI.
-2. nanobind bindings, the descriptor runtime, the schema-hash check, and a CMake/scikit-build-core helper.
+1. **Done:** schema model, introspection, C++ header generation, `@native` with its modes, CLI.
+2. **Done:** nanobind extensions, the descriptor runtime, the schema-hash check, and the CMake package.
 3. The written wire format specification, the pure-Python msgpack codec, `reflect<T>` and the C++ msgpack driver.
 4. Arrow via nanoarrow, Parquet via pyarrow, optional Arrow C++ Parquet.
 5. Rust: structs with serde, PyO3 bindings, Arrow.

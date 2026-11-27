@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import textwrap
@@ -42,6 +43,10 @@ def test_native_with_tag():
             lambda: dataclass(type("Mutable", (), {"__annotations__": {"x": int}})),
             "only frozen dataclasses",
         ),
+        (
+            lambda: dataclass(frozen=True, slots=True)(type("Slotted", (), {})),
+            "dataclasses with slots are not supported",
+        ),
     ],
 )
 def test_native_rejects(make, message):
@@ -83,7 +88,7 @@ def test_mode_from_env(monkeypatch):
 
 def _run(mode: Mode, script: str) -> str:
     """What script prints, run in mode: in its own process, as a process has one mode"""
-    env = {"PATH": "", ENV_VAR: mode, "PYTHONPATH": str(Path(__file__).parent)}
+    env = os.environ | {ENV_VAR: mode, "PYTHONPATH": str(Path(__file__).parent)}
     return subprocess.run(
         [sys.executable, "-c", textwrap.dedent(script)],
         env=env,
