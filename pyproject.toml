@@ -1,0 +1,64 @@
+[project]
+name = "dataclass-native"
+version = "0.1.0"
+description = "Python dataclasses as a data description language, stored in generated C++ (and later Rust) structs"
+authors = [
+    {name = "Nick Young", email = "nick.young.github@gmail.com"}
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.13"
+
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: C++",
+    "Operating System :: OS Independent"
+]
+
+dependencies = []
+
+[project.scripts]
+dataclass-native = "dataclass_native.cli:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+dataclass_native = ["py.typed", "include/dataclass_native/*.hpp"]
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.7.0",
+    "pyright>=1.1.414",
+    "pytest",
+    "pytest-cov",
+    "ruff>=0.17.5",
+]
+
+[tool.pyright]
+include = ["src", "tests"]
+
+[tool.ruff.lint.per-file-ignores]
+# Instances of frozen dataclasses are immutable, so are fine as defaults
+"tests/schemas/*" = ["RUF009"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The schema modules used by the tests are imported as the top-level package "schemas"
+pythonpath = ["tests"]
+
+[tool.coverage.run]
+source = ["dataclass_native"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
