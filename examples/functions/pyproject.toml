@@ -1,0 +1,14 @@
+[project]
+name = "shop"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["dataclass-native"]
+
+# scikit-build-core builds CMakeLists.txt, and puts what that installs into the wheel
+[build-system]
+requires = ["scikit-build-core", "nanobind", "dataclass-native"]
+build-backend = "scikit_build_core.build"
+
+# This repository's dataclass-native, to run and to build with: not needed in a project of your own
+[tool.uv.sources]
+dataclass-native = { path = "../..", editable = true }
