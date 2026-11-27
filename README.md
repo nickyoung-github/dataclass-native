@@ -205,5 +205,5 @@ uv run pre-commit install   # Then ruff and pyright run on committing
 uv run pytest               # Builds the extensions of tests/schemas, and the examples, with CMake in build/tests
 ```
 
-CI runs the same hooks (`uv run pre-commit run --all-files`) and the tests, on Linux and macOS.
+CI runs the same hooks (`uv run pre-commit run --all-files`) and the tests, on Linux, macOS and Windows.
 
