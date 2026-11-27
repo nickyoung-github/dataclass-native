@@ -6,13 +6,13 @@ Why do this? I'm glad you asked! This approach solves several problems I've wres
 
 1. Pythonic data classes, which interact nicely with pyright and other static checkers
 2. Ability to run the python code without code generation steps
-  2. No-copy semantics when interacting with native code
+3. No-copy semantics when interacting with native code
 
-Protobufs fail on points 1. and 2., produce hideous python and require you to distribute the protobuf definitions
+Protobufs fail on points 1. and 2., produce hideous python and require you to distribute the protobuf definitions.
 
 AVRO is a bit more friendly but generates its classes dynamically which fails point 1.
 
-The approach of dataclass-native is to generate native classes - currently C++, with Rust to follow,,
+The approach of dataclass-native is to generate native classes - currently C++, with Rust to follow,
 whose storage the Python classes use directly. Native serialisation (msgpack, Arrow/Parquet) is planned.
 
 **Status:** early. Schema introspection, C++ header generation and the native Python binding work. Serialisation
@@ -78,7 +78,7 @@ Classes must be frozen. Mutable classes may be considered in future but for now 
 Containers are `tuple[T, ...]`, `tuple[A, B]`, `frozenset[T]` and `Mapping[K, V]`.
 
 A class may also be a pydantic dataclass (`pydantic.dataclasses.dataclass(frozen=True)`), to validate and convert
-what its objects are made from. pydantic's `BaseModel` is not supported, it does unfortunate things like setting `__dict__` directly on objects and has complicated (and rather ugly) code in `__setattr__` etc, which interferes with the the descriptors. `BaseModel` and descriptors are generally unhappy bedfellows.
+what its objects are made from. pydantic's `BaseModel` is not supported, it does unfortunate things like setting `__dict__` directly on objects and has complicated (and rather ugly) code in `__setattr__` etc, which interferes with the descriptors. `BaseModel` and descriptors are generally unhappy bedfellows.
 
 ## Generating C++
 
