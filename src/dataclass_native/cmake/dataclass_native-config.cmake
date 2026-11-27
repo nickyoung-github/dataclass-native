@@ -50,7 +50,9 @@ function(dataclass_native_add_extensions)
     target_include_directories(${target} PRIVATE "${ARG_GENERATED_DIRECTORY}" "${dataclass_native_INCLUDE_DIR}")
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${name}")
     if(ARG_LIBRARY_DIRECTORY)
-      set_target_properties(${target} PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${ARG_LIBRARY_DIRECTORY}/${directory}")
+      # As a generator expression, so that generators such as Visual Studio do not add a directory per configuration
+      set_target_properties(${target} PROPERTIES
+                            LIBRARY_OUTPUT_DIRECTORY "$<1:${ARG_LIBRARY_DIRECTORY}/${directory}>")
     endif()
     if(NOT directory)
       set(directory ".")

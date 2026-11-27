@@ -7,6 +7,7 @@ with nanobind: the native classes which @native classes store their fields in.
 """
 
 import sys
+from pathlib import Path
 from typing import Any
 
 from .. import schema as s
@@ -29,7 +30,7 @@ def generate(schema: s.Schema) -> dict[str, str]:
         MANIFEST + ".j2",
         extensions=[extension_name(name) for name in schema.modules],
         schemas=[
-            file
+            Path(file).as_posix()
             for name in schema.modules
             if (file := getattr(sys.modules[name], "__file__", None))
         ],
