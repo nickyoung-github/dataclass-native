@@ -2,7 +2,7 @@
 
 from ._mode import ENV_VAR, Mode, mode, set_mode
 from ._native import NativeBindingError, is_native, native
-from .cli import include_dir
+from .cli import cmake_dir, include_dir
 from .types import (
     DiscriminatedUnion,
     Float32,
@@ -34,6 +34,7 @@ __all__ = (
     "UInt16",
     "UInt32",
     "UInt64",
+    "cmake_dir",
     "include_dir",
     "is_native",
     "mode",

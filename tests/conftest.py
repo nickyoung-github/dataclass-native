@@ -7,8 +7,9 @@ from types import ModuleType
 
 import pytest
 
-# Before dataclass_native is imported: the tests describe the schemas, rather than binding them
-os.environ["DATACLASS_NATIVE_MODE"] = "pure"
+# Before dataclass_native is imported: the tests describe the schemas, rather than binding them. Unless the mode is
+# set, as it is to run test_runtime.py again with the schemas bound: see test_bindings.py
+os.environ.setdefault("DATACLASS_NATIVE_MODE", "pure")
 
 _ids = count()
 
