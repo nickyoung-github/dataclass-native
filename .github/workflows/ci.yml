@@ -1,0 +1,30 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Each OS and version runs to completion, though another fails
+      fail-fast: false
+      matrix:
+        # Not Windows, until CMake generators with a directory per configuration are allowed for
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # setuptools-scm derives the version from the tags
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      # ruff and pyright, as when committing
+      - run: uv run pre-commit run --all-files --show-diff-on-failure
+      # Builds the extensions of tests/schemas, and the examples, with the runner's C++ compiler
+      - run: uv run pytest --cov

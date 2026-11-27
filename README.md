@@ -1,6 +1,18 @@
 # dataclass-native
 
-Use Python dataclasses as a data description language. From them, generate matching C++ structs (and later Rust),
+Use Python dataclasses as a data description language.
+
+Why do this? I'm glad you asked! This approach solves several problems I've wrestled with when creating object models in Python which need to interact with native code implementations for performance reasons. The classic example is quant finance code. My main requirements are:
+
+1. Pythonic data classes, which interact nicely with pyright and other static checkers
+2. Ability to run the python code without code generation steps
+3. No-copy semantics when interacting with native code
+
+Protobufs fail on points 1. and 2., produce hideous python and require you to distribute the protobuf definitions.
+
+AVRO is a bit more friendly but generates its classes dynamically which fails point 1.
+
+The approach of dataclass-native is to generate native classes - currently C++, with Rust to follow,
 whose storage the Python classes use directly. Native serialisation (msgpack, Arrow/Parquet) is planned.
 
 **Status:** early. Schema introspection, C++ header generation and the native Python binding work. Serialisation
@@ -52,17 +64,21 @@ class Bond:
 @dataclass(frozen=True)
 class Trade:
     id: int
-    instrument: DiscriminatedUnion[Cash, Bond]   # Two structs: needs a tag when serialised
-    counterparty: Shared[Party]                  # Shared, not copied; serialised by reference
+    # Two structs: needs a tag when serialised
+    instrument: DiscriminatedUnion[Cash, Bond]
+    # Shared, not copied; serialised by reference
+    counterparty: Shared[Party]
     tags: tuple[str, ...] = ()
     limits: Mapping[Currency, float] | None = None
     executed: dt.datetime | None = None
 ```
 
-Classes must be frozen. Containers are `tuple[T, ...]`, `tuple[A, B]`, `frozenset[T]` and `Mapping[K, V]`.
+Classes must be frozen. Mutable classes may be considered in future but for now they cause too many problems.
+
+Containers are `tuple[T, ...]`, `tuple[A, B]`, `frozenset[T]` and `Mapping[K, V]`.
 
 A class may also be a pydantic dataclass (`pydantic.dataclasses.dataclass(frozen=True)`), to validate and convert
-what its objects are made from. pydantic's `BaseModel` is not supported.
+what its objects are made from. pydantic's `BaseModel` is not supported, it does unfortunate things like setting `__dict__` directly on objects and has complicated (and rather ugly) code in `__setattr__` etc, which interferes with the descriptors. `BaseModel` and descriptors are generally unhappy bedfellows.
 
 ## Generating C++
 
@@ -88,7 +104,7 @@ struct Trade
 };
 ```
 
-Unchanged files are left alone, so builds don't rerun needlessly.
+Unchanged files are untouched, so builds don't rerun needlessly.
 
 ## Storing Python objects in the structs
 
@@ -153,7 +169,8 @@ and declare it in Python, naming that extension:
 ```python
 from dataclass_native import native_function
 
-@native_function("._risk")   # my_schemas._risk: relative to this module's package
+
+@native_function("._risk")  # my_schemas._risk: relative to this module's package
 def rating(trade: Trade) -> int:
     return trade.counterparty.rating
 ```
@@ -184,8 +201,9 @@ with C++ functions.
 
 ```shell
 uv sync
-uv run pytest   # Builds the extensions of tests/schemas, and the examples, with CMake in build/tests
-uv run ruff check . && uv run pyright
+uv run pre-commit install   # Then ruff and pyright run on committing
+uv run pytest               # Builds the extensions of tests/schemas, and the examples, with CMake in build/tests
 ```
 
-The version is that of the latest tag. Pushing a tag such as `v1.2.3` publishes that version to PyPI.
+CI runs the same hooks (`uv run pre-commit run --all-files`) and the tests, on Linux and macOS.
+
