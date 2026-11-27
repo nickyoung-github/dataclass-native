@@ -131,6 +131,37 @@ vars(trade)                     # {'__native__': <my_schemas._trades_native.Trad
 Trade(id="1", ...)              # TypeError: Trade.id cannot be '1'
 ```
 
+## Calling C++ functions
+
+A C++ function of the structs is called from Python as a function of the dataclasses. Bind it with nanobind, in an
+extension of your own:
+
+```cpp
+#include "dataclass_native/python.hpp"
+#include "my_schemas/trades.hpp"
+
+int rating(const my_schemas::trades::Trade& trade);   // Plain C++, knowing nothing of Python
+
+NB_MODULE(_risk, m)
+{
+    m.def("rating", &rating);
+}
+```
+
+and declare it in Python, naming that extension:
+
+```python
+from dataclass_native import native_function
+
+@native_function("._risk")   # my_schemas._risk: relative to this module's package
+def rating(trade: Trade) -> int:
+    return trade.counterparty.rating
+```
+
+`rating(trade)` then calls the C++ function with the struct in which the trade's fields are stored, without copying
+it. A struct which C++ returns likewise becomes the object of the return annotation. The body is the function's
+Python implementation, which is what runs in `pure` mode. See [examples/functions](examples/functions).
+
 ## Modes
 
 `DATACLASS_NATIVE_MODE` is one of:
@@ -139,13 +170,21 @@ Trade(id="1", ...)              # TypeError: Trade.id cannot be '1'
 - `mixed`: as `strict`, but a class whose binding is missing behaves as a plain dataclass.
 - `pure`: `@native` returns every class unchanged, as a plain dataclass, for testing.
 
+A `@native_function` follows them: `strict` raises if its native function is missing, `mixed` then calls its body, and
+`pure` always calls its body.
+
 A binding built from another version of its class raises in `strict` and `mixed` modes: build it again.
+
+## Examples
+
+[examples](examples) has projects to copy from, each built by scikit-build-core: a schema stored natively, and one
+with C++ functions.
 
 ## Development
 
 ```shell
 uv sync
-uv run pytest   # Builds the extensions of tests/schemas with CMake, in build/tests
+uv run pytest   # Builds the extensions of tests/schemas, and the examples, with CMake in build/tests
 uv run ruff check . && uv run pyright
 ```
 
