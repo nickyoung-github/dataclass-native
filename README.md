@@ -16,7 +16,7 @@ The approach of dataclass-native is to generate native classes - currently C++, 
 whose storage the Python classes use directly. Native serialisation (msgpack, Arrow/Parquet) is planned.
 
 **Status:** early. Schema introspection, C++ header generation and the native Python binding work. Serialisation
-and Rust are to come: see [DESIGN.md](DESIGN.md).
+to msgpack works in Python, with C++ and Rust to come: see [DESIGN.md](DESIGN.md).
 
 ## Defining a schema
 
@@ -178,6 +178,20 @@ def rating(trade: Trade) -> int:
 `rating(trade)` then calls the C++ function with the struct in which the trade's fields are stored, without copying
 it. A struct which C++ returns likewise becomes the object of the return annotation. The body is the function's
 Python implementation, which is what runs in `pure` mode. See [examples/functions](examples/functions).
+
+## Serialising
+
+```python
+from dataclass_native import from_msgpack, to_msgpack
+
+data = to_msgpack(trade)  # bytes
+from_msgpack(Trade, data) == trade  # True
+```
+
+The bytes are msgpack, in the format of [WIRE_FORMAT.md](WIRE_FORMAT.md). An object held by `Shared` fields is
+written once, so the party two trades share is still one object when they are read back. For now this is
+implemented in Python, which works in every mode; the C++ implementation, reading and writing the structs
+directly, is to come.
 
 ## Modes
 

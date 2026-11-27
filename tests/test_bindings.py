@@ -1,4 +1,4 @@
-"""The Python extensions generated for schema modules: built with CMake, then test_runtime.py is run with them"""
+"""The Python extensions generated for schema modules: built with CMake, then test_runtime.py and test_msgpack.py are run with them"""
 
 import os
 import shutil
@@ -79,6 +79,7 @@ def test_runtime_with_extensions(built, mode):
             "-m",
             "pytest",
             str(TESTS / "test_runtime.py"),
+            str(TESTS / "test_msgpack.py"),
             "-q",
             "--no-cov",
             "-p",
@@ -231,6 +232,31 @@ def test_pickles_load_in_any_mode(built, tmp_path):
         path = (tmp_path / f"{dump}.pickle").as_posix()
         _run(built, dump, script.format(action="dump", path=path))
         assert _run(built, load, script.format(action="load", path=path)) == "True\n"
+
+
+def test_msgpack_is_read_in_any_mode(built, tmp_path):
+    script = """
+        from pathlib import Path
+        from dataclass_native import from_msgpack, to_msgpack
+        from schemas.common import Currency, Party, Side
+        from schemas.trades import Bond, Trade
+
+        party = Party("p")
+        limits = dict.fromkeys(Currency, 1.0)
+        trade = Trade(1, Side.BUY, Bond("XS1", coupon=0.5), party, broker=party, limits=limits)
+        path = Path("{path}")
+        if "{action}" == "write":
+            path.write_bytes(to_msgpack(trade))
+        else:
+            data = path.read_bytes()
+            read = from_msgpack(Trade, data)
+            print(read == trade, read.broker is read.counterparty, to_msgpack(read) == data)
+    """
+    for write, read in ((Mode.PURE, Mode.STRICT), (Mode.STRICT, Mode.PURE)):
+        path = (tmp_path / f"{write}.msgpack").as_posix()
+        _run(built, write, script.format(action="write", path=path))
+        out = _run(built, read, script.format(action="read", path=path))
+        assert out == "True True True\n"
 
 
 def test_generated_source():

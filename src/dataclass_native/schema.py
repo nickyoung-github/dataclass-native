@@ -271,7 +271,8 @@ def wire_kind(t: Type) -> tuple[str, ...]:
             return ("float",)
         case Str() | EnumRef():
             return ("str",)
-        case Bytes():
+        case Bytes() | Sequence(Int(bits=8, signed=False)):
+            # Bytes natively too: a std::vector of them
             return ("bin",)
         case DateTime():
             return ("timestamp",)
