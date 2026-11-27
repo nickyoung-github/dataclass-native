@@ -1,6 +1,5 @@
 [project]
 name = "dataclass-native"
-version = "0.1.0"
 description = "Python dataclasses as a data description language, stored in generated C++ (and later Rust) structs"
 authors = [
     {name = "Nick Young", email = "nick.young.github@gmail.com"}
@@ -19,6 +18,8 @@ classifiers = [
     "Operating System :: OS Independent"
 ]
 
+dynamic = ["version"]
+
 dependencies = [
     "jinja2>=3.1.6",
 ]
@@ -27,8 +28,12 @@ dependencies = [
 dataclass-native = "dataclass_native.cli:main"
 
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
+
+# The version is that of the latest tag, e.g. v1.2.3
+[tool.setuptools_scm]
+version_file = "src/dataclass_native/_version.py"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -70,6 +75,7 @@ source = ["dataclass_native"]
 branch = true
 # The modes other than pure are tested in processes of their own
 patch = ["subprocess"]
+omit = ["*/_version.py"]
 
 [tool.coverage.report]
 show_missing = true
