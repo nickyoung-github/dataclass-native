@@ -131,6 +131,7 @@ it is wrong, not missing.
 
 All three implementations (C++, Rust and a pure-Python one, used by plain dataclasses) follow one wire format. The
 pure-Python codec is the reference implementation, and writes golden files that the C++ and Rust tests must read.
+The msgpack format is specified in [WIRE_FORMAT.md](WIRE_FORMAT.md).
 
 | Kind | msgpack | Arrow |
 |---|---|---|
@@ -146,7 +147,8 @@ pure-Python codec is the reference implementation, and writes golden files that 
 **Shared and bundles.** A type reaching any `Shared` field is serialised as a bundle: the roots, plus a table of
 objects per type. Each `Shared` field is a reference to a row of one of those tables.
 
-- msgpack: `{"root": ..., "shared": {tag: [...]}}`.
+- msgpack: `{"root": ..., "shared": [[tag, [...]], ...]}`. An array of tables, not a map, as a reference gives
+  the index of its table.
 - Arrow: a table per tag, i.e. a `dict[tag, Table]` in Python, and a file per tag for Parquet.
 
 This means:
@@ -270,7 +272,8 @@ what an object is made from, before the native class checks it.
 1. **Done:** schema model, introspection, C++ header generation, `@native` with its modes, CLI.
 2. **Done:** nanobind extensions, the descriptor runtime, the schema-hash check, the CMake package, and
    `@native_function`.
-3. The written wire format specification, the pure-Python msgpack codec, `reflect<T>` and the C++ msgpack driver.
+3. **Partly done:** the written wire format specification and the pure-Python msgpack codec. To come:
+   `reflect<T>` and the C++ msgpack driver.
 4. Arrow via nanoarrow, Parquet via pyarrow, optional Arrow C++ Parquet.
 5. Rust: structs with serde, PyO3 bindings, Arrow.
 6. Mutable classes.
