@@ -17,12 +17,17 @@ from dataclass_native.schema import schema_hash
 
 TESTS = Path(__file__).parent
 BUILD = TESTS.parent / "build" / "tests"
+# With forward slashes, as CMake has paths
+PYTHON = Path(sys.executable).as_posix()
+# The configuration to build, for the CMake generators which build several
+RELEASE = ("--config", "Release")
 
 
 def _cmake(*arguments: str):
     path = os.pathsep.join([str(Path(sys.executable).parent), os.environ["PATH"]])
     cmake = shutil.which("cmake", path=path)
-    if cmake is None or shutil.which("c++") is None:
+    # On Windows, CMake finds Visual Studio's compiler, which is not on the path
+    if cmake is None or (os.name != "nt" and shutil.which("c++") is None):
         pytest.skip("No CMake or C++ compiler")
 
     directory = BUILD / "cmake"
@@ -46,10 +51,10 @@ def built() -> Path:
     _cmake(
         "-S",
         str(TESTS / "cmake"),
-        f"-DPython_EXECUTABLE={sys.executable}",
-        f"-DSCHEMAS_ROOT={root}",
+        f"-DPython_EXECUTABLE={PYTHON}",
+        f"-DSCHEMAS_ROOT={root.as_posix()}",
     )
-    _cmake("--build", ".", "--parallel")
+    _cmake("--build", ".", "--parallel", *RELEASE)
     return root
 
 
@@ -80,7 +85,7 @@ def test_runtime_with_extensions(built, mode):
             "no:cacheprovider",
         ]
         # Not prepending tests to the path, where the schemas have no extensions
-        + ["--import-mode=importlib", "-o", f"pythonpath={built}"],
+        + ["--import-mode=importlib", "-o", f"pythonpath={built.as_posix()}"],
         env=os.environ | {ENV_VAR: mode},
         capture_output=True,
         text=True,
@@ -92,9 +97,9 @@ def test_runtime_with_extensions(built, mode):
 
 def test_extensions_install_to_their_packages(built, tmp_path):
     # As scikit-build-core does, to make a wheel
-    _cmake("--install", ".", "--prefix", str(tmp_path))
+    _cmake("--install", ".", "--prefix", str(tmp_path), *RELEASE)
     installed = sorted(
-        str(p.relative_to(tmp_path)).partition(".")[0]
+        p.relative_to(tmp_path).as_posix().partition(".")[0]
         for p in tmp_path.rglob("*")
         if p.is_file()
     )
@@ -223,7 +228,7 @@ def test_pickles_load_in_any_mode(built, tmp_path):
             print(pickle.loads(Path("{path}").read_bytes()) == trade)
     """
     for dump, load in ((Mode.PURE, Mode.STRICT), (Mode.STRICT, Mode.PURE)):
-        path = tmp_path / f"{dump}.pickle"
+        path = (tmp_path / f"{dump}.pickle").as_posix()
         _run(built, dump, script.format(action="dump", path=path))
         assert _run(built, load, script.format(action="load", path=path)) == "True\n"
 
@@ -280,8 +285,8 @@ def test_generated_source():
         )
         # The schema modules, on changing which this must be generated again
         set(DATACLASS_NATIVE_SCHEMAS
-            [==[{TESTS / "schemas" / "sub" / "inner.py"}]==]
-            [==[{TESTS / "schemas" / "common.py"}]==]
+            [==[{(TESTS / "schemas" / "sub" / "inner.py").as_posix()}]==]
+            [==[{(TESTS / "schemas" / "common.py").as_posix()}]==]
         )
         """
     )
@@ -330,7 +335,8 @@ def test_cli(tmp_path, capsys):
         == 0
     )
     written = {
-        str(Path(p).relative_to(tmp_path)) for p in capsys.readouterr().out.split()
+        Path(p).relative_to(tmp_path).as_posix()
+        for p in capsys.readouterr().out.split()
     }
     assert {
         "schemas/common.hpp",

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from test_bindings import BUILD, TESTS, _cmake
+from test_bindings import BUILD, PYTHON, RELEASE, TESTS, _cmake
 
 from dataclass_native import ENV_VAR, Mode
 
@@ -20,13 +20,13 @@ def _demo(example: str, installed: Path) -> dict[Mode, list[str]]:
     source, build = EXAMPLES / example, BUILD / "examples" / example
     _cmake(
         *("-S", str(source), "-B", str(build)),
-        f"-DPython_EXECUTABLE={sys.executable}",
+        f"-DPython_EXECUTABLE={PYTHON}",
         "-DCMAKE_BUILD_TYPE=Release",
     )
-    _cmake("--build", str(build), "--parallel")
+    _cmake("--build", str(build), "--parallel", *RELEASE)
     # The example's package, with its extensions: as its wheel has them
     shutil.copytree(source / "src", installed, dirs_exist_ok=True)
-    _cmake("--install", str(build), "--prefix", str(installed))
+    _cmake("--install", str(build), "--prefix", str(installed), *RELEASE)
 
     lines = {}
     for mode in Mode:

@@ -26,4 +26,4 @@ target_compile_features(schemas_functions PRIVATE cxx_std_20)
 target_include_directories(schemas_functions PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/dataclass_native"
                                                      "${dataclass_native_INCLUDE_DIR}")
 set_target_properties(schemas_functions PROPERTIES OUTPUT_NAME _functions
-                                                   LIBRARY_OUTPUT_DIRECTORY "${SCHEMAS_ROOT}/schemas")
+                                                   LIBRARY_OUTPUT_DIRECTORY "$<1:${SCHEMAS_ROOT}/schemas>")

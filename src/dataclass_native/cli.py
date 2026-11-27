@@ -46,10 +46,10 @@ def _write(out: Path, files: dict[str, str]) -> list[Path]:
     written = []
     for relative, contents in files.items():
         path = out / relative
-        if path.exists() and path.read_text() == contents:
+        if path.exists() and path.read_text(encoding="utf-8") == contents:
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(contents)
+        path.write_text(contents, encoding="utf-8")
         written.append(path)
     return written
 

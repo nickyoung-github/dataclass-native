@@ -261,8 +261,7 @@ what an object is made from, before the native class checks it.
 - Free-threaded Python: native members have no locking.
 - Using these types from other extension modules requires the same nanobind ABI.
 - Generation imports the schema modules, so runs their code.
-- Built and tested with clang on macOS only. CMake generators with a directory per configuration (Visual Studio)
-  need `LIBRARY_DIRECTORY` to allow for it.
+- Built and tested in CI with gcc on Linux, clang on macOS and Visual Studio on Windows, not elsewhere.
 - Mutable classes (later) bring back the problem of references versus copies: path-based proxies for nested values
   and containers, and `Shared` for real aliasing.
 
