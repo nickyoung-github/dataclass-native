@@ -310,6 +310,27 @@ def _to_native(t: s.Type) -> _Converter:
 
             return sequence
 
+        case s.Array():
+            np = import_module("numpy")
+            dtype = np.dtype(t.dtype)
+            of = (
+                f"of {t.dimensions} dimensions"
+                if t.dimensions > 1
+                else "of one dimension"
+            )
+
+            def array(value: Any) -> Any:
+                if (
+                    type(value) is not np.ndarray
+                    or value.dtype != dtype
+                    or value.ndim != t.dimensions
+                ):
+                    raise _error(value, f"an array of {dtype}, {of}")
+                # As it is in memory, which is what the native array copies
+                return np.ascontiguousarray(value)
+
+            return array
+
         case s.Tuple(elements):
             convert = _zipped([_to_native(e) for e in elements])
 

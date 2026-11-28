@@ -23,6 +23,8 @@ it is to read.
 | an enum | `dictionary<int32, string>`: the member's name |
 | `X \| None` | as `X`, null for `None` |
 | `tuple[X, ...]` | `list<X>` |
+| a numpy array of numbers, of one dimension | as the `tuple` of its numbers: `list<X>`, or `binary` if they are `uint8` |
+| one of more dimensions | `struct<data, shape: fixed_size_list<int32>[N]>`: `data` is its numbers as those of one dimension are, the last dimension varying fastest. As `arrow.variable_shape_tensor` is stored |
 | `frozenset[K]` | `list<K>`, in ascending order |
 | `tuple[A, B]` | `struct<0: A, 1: B>` |
 | `Mapping[K, V]` | `map<K, V>`, in ascending order of key |

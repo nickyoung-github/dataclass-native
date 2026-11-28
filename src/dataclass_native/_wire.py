@@ -7,7 +7,9 @@ object is stored natively: then the C++ of dataclass_native/msgpack.hpp writes a
 """
 
 import datetime as dt
+import math
 import struct
+import sys
 from collections.abc import Callable, Mapping
 from typing import Any, overload
 from weakref import WeakKeyDictionary
@@ -310,6 +312,50 @@ def _ordered(values: Any, key: Callable[[Any], Any] | None) -> list[Any]:
     return ordered
 
 
+# Each size of an array's shape
+_SHAPE = s.Sequence(s.Int(64, signed=False))
+
+
+def _numbers(t: s.Array) -> Callable[[Any], tuple[Any, ...]]:
+    """Gives the numbers of an array of the type, the last of its dimensions varying fastest: it is written as the
+    tuple of them is, after its shape if it is of more than one dimension"""
+    np = sys.modules["numpy"]
+    dtype = np.dtype(t.dtype)
+
+    def numbers(value: Any) -> tuple[Any, ...]:
+        if (
+            type(value) is not np.ndarray
+            or value.dtype != dtype
+            or value.ndim != t.dimensions
+        ):
+            raise _Invalid
+        return tuple(value.ravel().tolist())
+
+    return numbers
+
+
+def _array(t: s.Array) -> Callable[..., Any]:
+    """Gives the array of the type which holds some numbers, of a shape if it is of more than one dimension: one
+    which cannot be written to, as natively"""
+    np = sys.modules["numpy"]
+    dtype = np.dtype(t.dtype)
+
+    def array(numbers: tuple[Any, ...], shape: tuple[int, ...] | None = None) -> Any:
+        value = np.array(numbers, dtype)
+        if shape is not None:
+            if (
+                len(shape) != t.dimensions
+                or min(shape) < 0
+                or math.prod(shape) != len(numbers)
+            ):
+                raise _Invalid
+            value = value.reshape(shape)
+        value.flags.writeable = False
+        return value
+
+    return array
+
+
 def _exactly(typ: type, pack: Callable[[bytearray, Any], None]) -> _Encode:
     def encode(value: Any, out: bytearray, writer: _Writer):
         if type(value) is not typ:
@@ -475,6 +521,20 @@ def _encoder(t: s.Type) -> _Encode:
                     encode(item, out, writer)
 
             return array
+
+        case s.Array(element, dimensions):
+            numbers, encode = _numbers(t), _encoder(s.Sequence(element))
+            if dimensions == 1:
+                return lambda value, out, writer: encode(numbers(value), out, writer)
+            encode_shape = _encoder(_SHAPE)
+
+            def shaped(value: Any, out: bytearray, writer: _Writer):
+                flat = numbers(value)
+                m.pack_array(out, 2)
+                encode_shape(value.shape, out, writer)
+                encode(flat, out, writer)
+
+            return shaped
 
         case s.Tuple(elements):
             encoders = [_encoder(e) for e in elements]
@@ -650,6 +710,19 @@ def _decoder(t: s.Type) -> _Decode:
                 return container(decode(item, reader) for item in wire)
 
             return array
+
+        case s.Array(element, dimensions):
+            held, decode = _array(t), _decoder(s.Sequence(element))
+            if dimensions == 1:
+                return lambda wire, reader: held(decode(wire, reader))
+            decode_shape = _decoder(_SHAPE)
+
+            def shaped(wire: Any, reader: _Reader) -> Any:
+                if type(wire) is not list or len(wire) != 2:
+                    raise _Invalid
+                return held(decode(wire[1], reader), decode_shape(wire[0], reader))
+
+            return shaped
 
         case s.Tuple(elements):
             decoders = [_decoder(e) for e in elements]

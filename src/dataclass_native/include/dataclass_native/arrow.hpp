@@ -168,6 +168,17 @@ namespace dataclass_native::arrow
                     ++zeros;
                 ++length;
             }
+
+            // So many bits which are set
+            void append_set(std::int64_t count)
+            {
+                for (; count && length % 8; --count)
+                    append(true);
+                bytes.insert(bytes.end(), static_cast<std::size_t>(count / 8), 0xFF);
+                length += count - count % 8;
+                for (count %= 8; count; --count)
+                    append(true);
+            }
         };
 
         inline constexpr std::int64_t day_microseconds = 86'400'000'000;
@@ -374,6 +385,13 @@ namespace dataclass_native::arrow
             {
                 validity.append(true);
                 push(data, value);
+            }
+
+            void put(std::span<const P> values)
+            {
+                validity.append_set(static_cast<std::int64_t>(values.size()));
+                const auto* bytes = reinterpret_cast<const std::uint8_t*>(values.data());
+                data.insert(data.end(), bytes, bytes + values.size_bytes());
             }
 
             void append_null()
@@ -715,7 +733,7 @@ namespace dataclass_native::arrow
                 return make_array(validity.length, validity.zeros, std::move(buffers), std::move(children));
             }
 
-        private:
+        protected:
             void end(bool valid)
             {
                 if (count > 0x7FFF'FFFF)
@@ -733,6 +751,97 @@ namespace dataclass_native::arrow
         template <class E>
         struct Column<std::set<E>> : List<std::set<E>, E>
         {
+        };
+
+        // The numbers of an array: as the tuple of them is, but for being added to their column at once
+        template <class E>
+        struct Numbers : Column<std::vector<E>>
+        {
+            void append(const std::vector<E>& values, Writer& writer)
+            {
+                if constexpr (std::same_as<std::vector<E>, Bytes>)
+                    Column<Bytes>::append(values, writer);
+                else
+                {
+                    this->elements.put(std::span<const E>(values));
+                    this->count += static_cast<std::int64_t>(values.size());
+                    this->end(true);
+                }
+            }
+        };
+
+        // An array of one dimension: its numbers
+        template <class E>
+        struct Column<Array<E>> : Numbers<E>
+        {
+            static void discover(const Array<E>&, Writer&)
+            {
+            }
+
+            void append(const Array<E>& value, Writer& writer)
+            {
+                Numbers<E>::append(*value, writer);
+            }
+        };
+
+        // An array of more dimensions: a struct of its numbers and its shape, as arrow.variable_shape_tensor is stored
+        template <class E, std::size_t N>
+        struct Column<Array<E, N>>
+        {
+            Bits validity;
+            Numbers<E> data;
+            Bits shapes;
+            Fixed<std::int32_t> sizes;
+
+            static void discover(const Array<E, N>&, Writer&)
+            {
+            }
+
+            void append(const Array<E, N>& value, Writer& writer)
+            {
+                validity.append(true);
+                data.append(*value, writer);
+                shapes.append(true);
+                for (const std::size_t size : value.shape())
+                {
+                    if (size > 0x7FFF'FFFF)
+                        throw Error("A column of arrays cannot hold one of more than 2147483647 in a dimension");
+                    sizes.put(static_cast<std::int32_t>(size));
+                }
+            }
+
+            void append_null()
+            {
+                validity.append(false);
+                data.append_null();
+                shapes.append(false);
+                for (std::size_t i = 0; i != N; ++i)
+                    sizes.append_null();
+            }
+
+            static ArrowSchema schema(std::string_view name, std::int64_t flags = ARROW_FLAG_NULLABLE)
+            {
+                std::vector<ArrowSchema> item;
+                item.push_back(Column<std::int32_t>::schema("item"));
+                std::vector<ArrowSchema> children;
+                children.push_back(Numbers<E>::schema("data"));
+                children.push_back(make_schema("+w:" + std::to_string(N), "shape", std::move(item)));
+                return make_schema("+s", name, std::move(children), flags);
+            }
+
+            ArrowArray finish()
+            {
+                std::vector<Buffer> held;
+                held.push_back(std::move(shapes.bytes));
+                std::vector<ArrowArray> item;
+                item.push_back(sizes.finish());
+                std::vector<ArrowArray> children;
+                children.push_back(data.finish());
+                children.push_back(make_array(shapes.length, shapes.zeros, std::move(held), std::move(item)));
+                std::vector<Buffer> buffers;
+                buffers.push_back(std::move(validity.bytes));
+                return make_array(validity.length, validity.zeros, std::move(buffers), std::move(children));
+            }
         };
 
         // A map, in ascending order of key
@@ -1393,6 +1502,97 @@ namespace dataclass_native::arrow
         struct View<std::set<E>> : ListView<std::set<E>, E>
         {
             using ListView<std::set<E>, E>::ListView;
+        };
+
+        // The numbers of an array
+        template <class E>
+        struct NumbersView : View<std::vector<E>>
+        {
+            using View<std::vector<E>>::View;
+
+            std::vector<E> get(std::int64_t index, Reader& reader) const
+            {
+                if constexpr (!std::same_as<std::vector<E>, Bytes>)
+                {
+                    // At once, if none is null
+                    const ArrowArray& numbers = *this->elements.array;
+                    if (const auto [at, end] = range_at(*this->array, index); numbers.null_count == 0 && at < end)
+                    {
+                        std::vector<E> values(static_cast<std::size_t>(end - at));
+                        std::memcpy(values.data(),
+                                    static_cast<const std::uint8_t*>(numbers.buffers[1]) +
+                                        (numbers.offset + at) * sizeof(E),
+                                    values.size() * sizeof(E));
+                        return values;
+                    }
+                }
+                return View<std::vector<E>>::get(index, reader);
+            }
+        };
+
+        template <class E>
+        struct View<Array<E>> : NumbersView<E>
+        {
+            using NumbersView<E>::NumbersView;
+
+            Array<E> get(std::int64_t index, Reader& reader) const
+            {
+                return NumbersView<E>::get(index, reader);
+            }
+        };
+
+        // An array of more dimensions: the struct of its numbers and its shape
+        template <class E, std::size_t N>
+        struct View<Array<E, N>> : Slots
+        {
+            NumbersView<E> data;
+            const ArrowArray* shapes;
+            View<std::int32_t> sizes;
+
+            View(const ArrowSchema& schema, const ArrowArray& array)
+                : Slots{&laid_out(schema, array)}, data(*schema.children[0], *array.children[0]),
+                  shapes(array.children[1]), sizes(*schema.children[1]->children[0], *shapes->children[0])
+            {
+            }
+
+            Array<E, N> get(std::int64_t index, Reader& reader) const
+            {
+                index += array->offset;
+                if (data.null(index) || null_at(*shapes, index))
+                    invalid();
+                typename Array<E, N>::Shape shape;
+                const std::int64_t first = (shapes->offset + index) * static_cast<std::int64_t>(N);
+                for (std::size_t i = 0; i != N; ++i)
+                {
+                    const std::int32_t size = element(sizes, first + static_cast<std::int64_t>(i), reader);
+                    if (size < 0)
+                        invalid();
+                    shape[i] = static_cast<std::size_t>(size);
+                }
+                std::vector<E> values = data.get(index, reader);
+                if (!Array<E, N>::fits(shape, values.size()))
+                    invalid();
+                return {std::move(values), shape};
+            }
+
+        private:
+            static const ArrowArray& laid_out(const ArrowSchema& schema, const ArrowArray& array)
+            {
+                if (!has_format(schema, "+s"))
+                    unsupported();
+                checked(schema, array, 1, 2);
+                const ArrowSchema& shape = *schema.children[1];
+                if (!named(*schema.children[0], "data") || !named(shape, "shape") ||
+                    !has_format(shape, "+w:" + std::to_string(N)))
+                    unsupported();
+                checked(shape, *array.children[1], 1, 1);
+                return array;
+            }
+
+            static bool named(const ArrowSchema& schema, std::string_view name)
+            {
+                return schema.name && name == schema.name;
+            }
         };
 
         template <class K, class V>

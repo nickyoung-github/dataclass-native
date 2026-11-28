@@ -8,6 +8,7 @@
 #include <utility>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
@@ -309,6 +310,38 @@ struct type_caster<dataclass_native::Shared<T>>
     static handle from_cpp(const Value& value, rv_policy policy, cleanup_list* cleanup) noexcept
     {
         return Caster::from_cpp(value.ptr(), policy, cleanup);
+    }
+};
+
+// A numpy array of what the Array holds, which is not copied: it cannot be written to, and keeps what it holds alive.
+// Made from an array of exactly its type and number of dimensions, whose numbers are copied
+template <typename T, size_t N>
+struct type_caster<dataclass_native::Array<T, N>>
+{
+    using Array = dataclass_native::Array<T, N>;
+    using Read = ndarray<numpy, const T, ndim<N>>;
+    using Given = ndarray<const T, ndim<N>, c_contig, device::cpu>;
+    using Held = std::shared_ptr<const std::vector<T>>;
+    NB_TYPE_CASTER(Array, make_caster<Read>::Name)
+
+    bool from_python(handle src, uint32_t flags, cleanup_list* cleanup) noexcept
+    {
+        make_caster<Given> caster;
+        if (src.is_none() || !caster.from_python(src, flags & ~static_cast<uint32_t>(cast_flags::convert), cleanup))
+            return false;
+        const Given& given = caster.value;
+        typename Array::Shape shape;
+        for (size_t i = 0; i != N; ++i)
+            shape[i] = given.shape(i);
+        value = Value(std::vector<T>(given.data(), given.data() + given.size()), shape);
+        return true;
+    }
+
+    static handle from_cpp(const Value& value, rv_policy, cleanup_list* cleanup) noexcept
+    {
+        const capsule owner(new Held(value.ptr()), [](void* held) noexcept { delete static_cast<Held*>(held); });
+        return make_caster<Read>::from_cpp(Read(value->data(), N, value.shape().data(), owner), rv_policy::reference,
+                                           cleanup);
     }
 };
 

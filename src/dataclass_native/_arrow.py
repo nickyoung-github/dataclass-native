@@ -18,10 +18,12 @@ from weakref import WeakKeyDictionary
 from . import schema as s
 from ._native import is_native, native_info
 from ._wire import (
+    _array,
     _brief,
     _Invalid,
     _member,
     _native_class,
+    _numbers,
     _order,
     _ordered,
     _struct_class,
@@ -392,6 +394,13 @@ def _type(t: s.Type, pa: Any, within: tuple[type, ...]) -> Any:
             return pa.binary()
         case s.Sequence(element) | s.Set(element):
             return pa.list_(_field("item", element, pa, within))
+        case s.Array(element, dimensions):
+            numbers = _type(s.Sequence(element), pa, within)
+            if dimensions == 1:
+                return numbers
+            # As Arrow's arrow.variable_shape_tensor is stored
+            shape = pa.list_(pa.field("item", pa.int32()), dimensions)
+            return pa.struct([pa.field("data", numbers), pa.field("shape", shape)])
         case s.Tuple(elements):
             return pa.struct(
                 [_field(str(i), e, pa, within) for i, e in enumerate(elements)]
@@ -530,6 +539,15 @@ def _plain(t: s.Type) -> _Plain:
 
             return array
 
+        case s.Array(element, dimensions):
+            numbers, plain = _numbers(t), _plain(s.Sequence(element))
+            if dimensions == 1:
+                return lambda value, writer: plain(numbers(value), writer)
+            return lambda value, writer: {
+                "data": plain(numbers(value), writer),
+                "shape": list(value.shape),
+            }
+
         case s.Tuple(elements):
             plains = [_plain(e) for e in elements]
 
@@ -666,6 +684,21 @@ def _object(t: s.Type) -> _Object:
                 return container(make(item, reader) for item in plain)
 
             return array
+
+        case s.Array(element, dimensions):
+            held, make = _array(t), _object(s.Sequence(element))
+            if dimensions == 1:
+                return lambda plain, reader: held(make(plain, reader))
+            make_shape = _object(s.Sequence(s.Int(32)))
+
+            def shaped(plain: Any, reader: _Reader) -> Any:
+                if type(plain) is not dict or plain.keys() != {"data", "shape"}:
+                    raise _Invalid
+                return held(
+                    make(plain["data"], reader), make_shape(plain["shape"], reader)
+                )
+
+            return shaped
 
         case s.Tuple(elements):
             makes = [_object(e) for e in elements]

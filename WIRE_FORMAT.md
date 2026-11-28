@@ -25,6 +25,8 @@ the members of a union apart and to skip a field it does not know.
 | `X \| None` | `nil`, or `X` |
 | `tuple[X, ...]` | an array |
 | `tuple[UInt8, ...]` | binary, as `bytes` |
+| a numpy array of numbers, of one dimension | as the `tuple` of its numbers: an array, or binary if they are `uint8` |
+| one of more dimensions | an array of two: its shape, an array of the size of each dimension, then its numbers as those of one dimension are, the last dimension varying fastest |
 | `tuple[A, B]` | an array, of as many elements as the tuple has |
 | `frozenset[K]` | an array, in ascending order |
 | `Mapping[K, V]` | a map, in ascending order of key |

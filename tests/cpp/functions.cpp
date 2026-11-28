@@ -36,6 +36,22 @@ NB_MODULE(_functions, m)
 
     m.def("later", [](dataclass_native::Date day, int days) { return day + std::chrono::days{days}; });
 
+    m.def("scaled", [](const dataclass_native::Array<double>& points, double factor) {
+        std::vector<double> scaled = *points;
+        for (double& point : scaled)
+            point *= factor;
+        return dataclass_native::Array<double>(std::move(scaled));
+    });
+
+    m.def("transposed", [](const dataclass_native::Array<double, 2>& values) {
+        const auto [rows, columns] = values.shape();
+        std::vector<double> transposed;
+        for (std::size_t column = 0; column != columns; ++column)
+            for (std::size_t row = 0; row != rows; ++row)
+                transposed.push_back(values(row, column));
+        return dataclass_native::Array<double, 2>(std::move(transposed), {columns, rows});
+    });
+
     m.def("nothing", [](int) {});
 
     m.def("unannotated", [](int value) { return value; });

@@ -1,8 +1,9 @@
 """The @native decorator, marking a dataclass as part of the schema and binding it to its native equivalent"""
 
 import inspect
+import sys
 from collections.abc import Callable
-from dataclasses import dataclass, is_dataclass
+from dataclasses import dataclass, fields, is_dataclass
 from functools import wraps
 from types import FunctionType
 from typing import Any, overload
@@ -47,6 +48,7 @@ def native(cls: Any = None, /, *, tag: str | None = None) -> Any:
     def decorate(cls: type) -> type:
         _validate(cls)
         _registry[cls] = NativeInfo(tag=tag or f"{cls.__module__}.{cls.__qualname__}")
+        _compare_arrays(cls)
         if (mode := _fix_mode()) is not Mode.PURE:
             _install_binding(cls, required=mode is Mode.STRICT)
         return cls
@@ -140,6 +142,62 @@ def _validate(cls: Any):
 
     if getattr(cls, "__type_params__", ()) or getattr(cls, "__parameters__", ()):
         raise TypeError(f"{cls.__qualname__}: generic dataclasses are not supported")
+
+
+def _compare_arrays(cls: Any):
+    """
+    Gives a class with fields which are arrays an __eq__ and __hash__ which compare them by what they hold, as the
+    dataclass's own compare each field with ==, which of arrays gives an array. Arrays are equal which hold the same
+    bits: so one of NaN equals itself, and 0.0 is not -0.0
+    """
+    np = sys.modules.get("numpy")
+    if np is None or not cls.__dataclass_params__.eq:
+        return
+
+    # Here, as introspect imports this module
+    from . import schema as s
+    from .introspect import resolve
+
+    arrays = set()
+    for f in fields(cls):
+        try:
+            # Each alone, as others may name classes which are not yet defined
+            tp = (
+                eval(f.type, dict(vars(sys.modules[cls.__module__])))
+                if isinstance(f.type, str)
+                else f.type
+            )
+            t = resolve(tp, f.name)
+        except (NameError, AttributeError, KeyError, SyntaxError, TypeError):
+            continue
+        if isinstance(t.inner if isinstance(t, s.Optional) else t, s.Array):
+            arrays.add(f.name)
+    if not arrays:
+        return
+
+    names = [f.name for f in fields(cls) if f.compare]
+
+    def bits(value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            return value.dtype.str, value.shape, value.tobytes()
+        return value
+
+    def key(self: Any) -> tuple[Any, ...]:
+        values = ((name, getattr(self, name)) for name in names)
+        return tuple(bits(value) if name in arrays else value for name, value in values)
+
+    def __eq__(self: Any, other: Any) -> Any:
+        return (
+            key(self) == key(other)
+            if other.__class__ is self.__class__
+            else NotImplemented
+        )
+
+    def __hash__(self: Any) -> int:
+        return hash(key(self))
+
+    cls.__eq__ = __eq__
+    cls.__hash__ = __hash__
 
 
 def _install_binding(cls: type, required: bool):

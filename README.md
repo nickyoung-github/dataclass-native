@@ -78,6 +78,11 @@ Classes must be frozen. Mutable classes may be considered in future but for now 
 
 Containers are `tuple[T, ...]`, `tuple[A, B]`, `frozenset[T]` and `Mapping[K, V]`.
 
+A field may also be a numpy array of numbers: `points: Vector[np.float64]` or `surface: Matrix[np.float64]`, from
+`dataclass_native.arrays`, or of more dimensions as numpy annotates it:
+`np.ndarray[tuple[int, int, int], np.dtype[np.uint8]]`. Unlike a tuple, it is not copied when read: the array you
+get is a read-only view of the numbers in the C++ struct. This needs numpy: install `dataclass-native[numpy]`.
+
 A class may also be a pydantic dataclass (`pydantic.dataclasses.dataclass(frozen=True)`), to validate and convert
 what its objects are made from. pydantic's `BaseModel` is not supported, it does unfortunate things like setting `__dict__` directly on objects and has complicated (and rather ugly) code in `__setattr__` etc, which interferes with the descriptors. `BaseModel` and descriptors are generally unhappy bedfellows.
 
