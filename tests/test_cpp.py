@@ -114,6 +114,8 @@ def test_common(headers):
                 static constexpr std::string_view name = "Money";
                 static constexpr std::string_view tag = "schemas.common.Money";
                 static constexpr bool shares = false;
+                using shared = Types<>;
+                static constexpr bool arrow = true;
                 static constexpr std::tuple fields{
                     Field{"amount", &::schemas::common::Money::amount, false},
                     Field{"currency", &::schemas::common::Money::currency, true},
@@ -126,6 +128,8 @@ def test_common(headers):
                 static constexpr std::string_view name = "Party";
                 static constexpr std::string_view tag = "party.v1";
                 static constexpr bool shares = false;
+                using shared = Types<>;
+                static constexpr bool arrow = true;
                 static constexpr std::tuple fields{
                     Field{"name", &::schemas::common::Party::name, false},
                     Field{"lei", &::schemas::common::Party::lei, true},
@@ -139,6 +143,8 @@ def test_common(headers):
                 static constexpr std::string_view name = "Fund";
                 static constexpr std::string_view tag = "schemas.common.Fund";
                 static constexpr bool shares = false;
+                using shared = Types<>;
+                static constexpr bool arrow = true;
                 static constexpr std::tuple fields{
                     Field{"name", &::schemas::common::Fund::name, false},
                     Field{"lei", &::schemas::common::Fund::lei, true},
@@ -189,6 +195,8 @@ def test_trades(headers):
         "float coupon = 0.05f;",
         # As it holds Shared values, and the name of a field is that it has in Python
         "static constexpr bool shares = true;",
+        "using shared = Types<::schemas::common::Party, ::schemas::common::Fund>;",
+        "static constexpr bool arrow = true;",
         'Field{"counterparty", &::schemas::trades::Trade::counterparty, false},',
     ]:
         assert expected in header, expected
@@ -210,6 +218,8 @@ def test_tree(headers):
         "dataclass_native::Indirect<Leaf>> left{};"
     ) in header
     assert "dataclass_native::Indirect<Expr> expr{};" in header
+    # Not held in Arrow tables, as they hold themselves
+    assert "static constexpr bool arrow = true;" not in header
 
 
 def test_pydantic_dataclass():
@@ -547,6 +557,106 @@ def test_msgpack_as_python_writes_it(tmp_path):
     modules = [*SCHEMA_MODULES, "schemas.kinds"]
     headers = cpp.generate(build_schema(modules))
     assert _run(tmp_path, headers, _MSGPACK_PROGRAM, str(tmp_path)).strip() == "ok"
+
+
+_ARROW_PROGRAM = """
+#include <cassert>
+#include <iostream>
+#include <string>
+
+#include "dataclass_native/arrow.hpp"
+
+#include "schemas/kinds.hpp"
+#include "schemas/sub/inner.hpp"
+#include "schemas/trades.hpp"
+
+using namespace schemas;
+using dataclass_native::Shared;
+using dataclass_native::arrow::from_arrow;
+using dataclass_native::arrow::SharedTable;
+using dataclass_native::arrow::Tables;
+using dataclass_native::arrow::to_arrow;
+
+// The objects, held in tables and read from them
+template <class T>
+std::vector<T> round_trip(const std::vector<T>& objects, std::size_t shared_tables)
+{
+    const Tables tables = to_arrow<T>(std::span<const T>(objects));
+    assert(tables.root.array.length == static_cast<std::int64_t>(objects.size()));
+    assert(tables.shared.size() == shared_tables);
+    std::vector<SharedTable> shared;
+    for (const auto& [tag, table] : tables.shared)
+        shared.push_back({tag, &table.schema, &table.array});
+    std::vector<T> read = from_arrow<T>(tables.root.schema, tables.root.array, shared);
+    if (read != objects)
+    {
+        std::cerr << "Not read as held" << std::endl;
+        std::exit(1);
+    }
+    return read;
+}
+
+int main()
+{
+    const Shared<common::Party> party{common::Party{.name = "Acme", .lei = "LEI1", .rating = 3}};
+    trades::Trade first{.id = 1, .side = common::Side::SELL, .instrument = trades::Bond{.isin = "XS1"},
+                        .counterparty = Shared<common::Fund>{common::Fund{.name = "Fund", .manager = "Ann"}}};
+    first.limits = {{common::Currency::GBP, 2.0}, {common::Currency::USD, 1.0}};
+    first.note = std::int64_t{7};
+    first.broker = party;
+    first.parties = {party, party, Shared<common::Party>{*party}};
+    trades::Trade second = first;
+    second.id = 2;
+    second.instrument = trades::Cash{};
+    second.counterparty = party;
+    second.labels = {};
+    second.note = std::nullopt;
+    second.broker = std::nullopt;
+
+    const Tables tables = to_arrow<trades::Trade>(std::span<const trades::Trade>(std::vector{first, second}));
+    assert(std::string(tables.root.schema.format) == "+s" && tables.root.schema.n_children == 19);
+    assert(tables.shared.size() == 2 && tables.shared[0].first == "party.v1");
+    // The party shared, and the one equal to it: and one fund
+    assert(tables.shared[0].second.array.length == 2 && tables.shared[1].second.array.length == 1);
+
+    const auto read = round_trip<trades::Trade>({first, second}, 2);
+    // What was shared still is, across rows too, and what was not is not
+    assert(read[0].broker->ptr() == read[0].parties[0].ptr() && read[0].parties[0].ptr() == read[0].parties[1].ptr());
+    assert(read[0].broker->ptr() == std::get<Shared<common::Party>>(read[1].counterparty).ptr());
+    assert(read[0].parties[2].ptr() != read[0].parties[0].ptr());
+
+    kinds::Kinds kinds{};
+    kinds.octets = {0, 255};
+    kinds.number = 1.5;
+    kinds.nested = {{common::Money{.amount = 1.0}}, {}, {common::Money{.amount = 2.0}}};
+    kinds.by_name = {{"b", {common::Side::SELL}}, {"a", {}}};
+    kinds.sides = {common::Side::SELL, common::Side::BUY};
+    kinds.pair = std::tuple{std::int64_t{-1}, common::Money{.amount = 4.0}};
+    kinds.container = std::map<std::string, common::Money>{{"m", common::Money{.amount = 1.0}}};
+    kinds.tagged = common::Side::SELL;
+    kinds.blobs = {{}, {0}};
+    round_trip<kinds::Kinds>({kinds::Kinds{}, kinds}, 0);
+    round_trip<kinds::Kinds>({}, 0);
+    round_trip<sub::inner::Order>({sub::inner::Order{.default_ = -33, .new_ = true}}, 0);
+
+    // Objects which share objects of their own class
+    const Shared<kinds::Link> last{kinds::Link{.name = "c"}};
+    const kinds::Link link{.name = "a", .next = Shared<kinds::Link>{kinds::Link{.name = "b", .next = last}}};
+    const auto links = round_trip<kinds::Link>({link, *last}, 1);
+    assert((**(*links[0].next)->next).name == "c");
+
+    std::cout << "ok" << std::endl;
+    return 0;
+}
+"""
+
+
+@needs_compiler
+def test_arrow_in_cpp_alone(tmp_path):
+    """Objects are held in Arrow tables, and read from them, with no Arrow library"""
+    modules = [*SCHEMA_MODULES, "schemas.kinds"]
+    headers = cpp.generate(build_schema(modules))
+    assert _run(tmp_path, headers, _ARROW_PROGRAM).strip() == "ok"
 
 
 def test_include_dir():

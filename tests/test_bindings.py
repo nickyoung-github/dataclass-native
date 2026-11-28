@@ -298,6 +298,8 @@ def test_generated_source():
                 .def_rw("new", &::schemas::sub::inner::Order::new_)
                 .def_rw("total", &::schemas::sub::inner::Order::total)
                 .def("__msgpack__", &dataclass_native::python::to_msgpack<::schemas::sub::inner::Order>)
+                .def_static("__arrow__", &dataclass_native::python::to_arrow<::schemas::sub::inner::Order>)
+                .def_static("__from_arrow__", &dataclass_native::python::from_arrow<::schemas::sub::inner::Order>)
                 .def_static("__from_msgpack__", &dataclass_native::python::from_msgpack<::schemas::sub::inner::Order>);
             schema["Order"] = "{schema_hash(describe(Order))}";
 

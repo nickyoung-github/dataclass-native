@@ -238,6 +238,7 @@ class _ModuleGenerator:
         }
 
     def __struct(self, struct: s.Struct) -> dict[str, Any]:
+        shared = shared_structs(self.__schema, struct.ref, [], set())
         members = []
         for f in struct.fields:
             where = f"{struct.cls.__qualname__}.{f.name}"
@@ -254,6 +255,8 @@ class _ModuleGenerator:
             "name": identifier(struct.name),
             "members": members,
             "shares": "true" if self.__shares(struct.ref, set()) else "false",
+            "shared": ", ".join(self.__qualified(ref) for ref in shared),
+            "arrow": "true" if in_arrow(self.__schema, struct) else "false",
             "fields": [
                 {
                     "name": identifier(f.name),
@@ -265,10 +268,14 @@ class _ModuleGenerator:
             **self.__described(struct),
         }
 
+    @staticmethod
+    def __qualified(item: s.Struct | s.Enum | s.StructRef) -> str:
+        return f"::{namespace(item.module)}::{identifier(item.name)}"
+
     def __described(self, item: s.Struct | s.Enum) -> dict[str, str]:
         """What the item's reflection gives of it, besides its fields or members"""
         return {
-            "qualified": f"::{namespace(item.module)}::{identifier(item.name)}",
+            "qualified": self.__qualified(item),
             "name_literal": _literal(item.name),
             "tag_literal": _literal(item.tag),
         }
@@ -417,6 +424,44 @@ class _ModuleGenerator:
             return f"{'-' if v < 0 else ''}std::numeric_limits<{typ}>::{limit}()"
         literal = repr(v)
         return f"{literal}f" if bits == 32 else literal
+
+
+def shared_structs(
+    schema: s.Schema, t: s.Type, shared: list[s.StructRef], seen: set[s.StructRef]
+) -> list[s.StructRef]:
+    """The structs which a value of the type may share, however deeply, in the order met"""
+    for inner in _walk(t):
+        if isinstance(inner, s.Shared) and inner.target not in shared:
+            shared.append(inner.target)
+        if isinstance(inner, s.StructRef) and inner not in seen:
+            seen.add(inner)
+            for f in schema.struct(inner).fields:
+                shared_structs(schema, f.type, shared, seen)
+    return shared
+
+
+def in_arrow(schema: s.Schema, struct: s.Struct) -> bool:
+    """Whether a struct may be held in Arrow tables: not if it, or a struct it may share, holds itself"""
+    shared = shared_structs(schema, struct.ref, [], set())
+    return not any(_holds_itself(schema, ref, ()) for ref in (struct.ref, *shared))
+
+
+def _holds_itself(schema: s.Schema, t: s.Type, within: tuple[s.StructRef, ...]) -> bool:
+    """Whether a value of the type may hold, other than as a Shared value, one of a struct it is within"""
+    match t:
+        case s.StructRef():
+            return t in within or any(
+                _holds_itself(schema, f.type, (*within, t))
+                for f in schema.struct(t).fields
+            )
+        case s.Indirect(target):
+            return _holds_itself(schema, target, within)
+        case s.Optional(inner) | s.Sequence(inner) | s.Map(_, inner):
+            return _holds_itself(schema, inner, within)
+        case s.Tuple(members) | s.Union(members):
+            return any(_holds_itself(schema, m, within) for m in members)
+        case _:
+            return False
 
 
 def _walk(t: s.Type) -> Iterator[s.Type]:

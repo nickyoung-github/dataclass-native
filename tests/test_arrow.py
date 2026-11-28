@@ -6,6 +6,7 @@ every mode, as test_runtime.py is.
 import datetime as dt
 from dataclasses import replace
 from typing import Any
+from unittest import mock
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -19,12 +20,18 @@ from schemas.validated import Account, Holder
 
 from dataclass_native import (
     ArrowTables,
+    Mode,
+    _arrow,
     from_arrow,
     from_parquet,
+    mode,
     to_arrow,
     to_parquet,
 )
+from dataclass_native._arrow import read, write
 from dataclass_native.schema import SchemaError
+
+BOUND = mode() is not Mode.PURE
 
 UTC = dt.UTC
 ENUM = pa.dictionary(pa.int32(), pa.string())
@@ -59,14 +66,79 @@ def _trades() -> tuple[Trade, ...]:
     return first, second
 
 
+def _same(table: Any, reference: Any, metadata: bool = True):
+    """A table holds what a reference does: but for which names an enum's dictionary has, which may differ"""
+    table.validate(full=True)
+    assert table.schema.equals(reference.schema, check_metadata=metadata)
+    assert table.to_pylist() == reference.to_pylist()
+
+
 def _round_trip(values: tuple[Any, ...]) -> tuple[Any, ...]:
+    cls = type(values[0])
     tables = to_arrow(values)
-    tables.root.validate(full=True)
-    for table in tables.shared.values():
-        table.validate(full=True)
-    read = from_arrow(type(values[0]), tables)
-    assert read == values
-    return read
+    # The implementation in Python, which that used may not be, holds the same
+    reference = write(values)
+    _same(tables.root, reference.root)
+    assert list(tables.shared) == list(reference.shared)
+    for tag, table in tables.shared.items():
+        _same(table, reference.shared[tag])
+
+    result = from_arrow(cls, tables)
+    assert result == values
+    # And each reads what the other holds
+    assert read(cls, tables) == values
+    assert from_arrow(cls, reference) == values
+    return result
+
+
+def test_bound_objects_are_held_natively():
+    trades = _trades()
+    tables = to_arrow(trades)
+    with (
+        mock.patch.object(_arrow, "write", side_effect=NotImplementedError),
+        mock.patch.object(_arrow, "read", side_effect=NotImplementedError),
+    ):
+        if BOUND:
+            assert from_arrow(Trade, to_arrow(trades)) == trades
+        else:
+            with pytest.raises(NotImplementedError):
+                to_arrow(trades)
+            with pytest.raises(NotImplementedError):
+                from_arrow(Trade, tables)
+
+
+def test_tables_in_parts():
+    trades = _trades()
+    tables = to_arrow(trades)
+    # A table which starts within its arrays, as do those it holds
+    assert (
+        from_arrow(Trade, ArrowTables(tables.root.slice(1), tables.shared))
+        == trades[1:]
+    )
+    party = tables.shared["party.v1"]
+    padded = pa.concat_tables([party.slice(1), party]).slice(1)
+    assert (
+        from_arrow(
+            Trade, ArrowTables(tables.root, tables.shared | {"party.v1": padded})
+        )
+        == trades
+    )
+    kinds = (
+        Kinds(),
+        Kinds(
+            nested=((Money(1.0),), ()), by_name={"a": (Side.BUY,)}, pair=(1, Money(2.0))
+        ),
+    )
+    assert (
+        from_arrow(Kinds, to_arrow(kinds * 3).root.slice(3, 2)) == kinds[1:] + kinds[:1]
+    )
+    # And one of several arrays
+    assert (
+        from_arrow(
+            Trade, ArrowTables(pa.concat_tables([tables.root] * 3), tables.shared)
+        )
+        == trades * 3
+    )
 
 
 def test_table():
@@ -275,8 +347,10 @@ def test_parquet(tmp_path):
     assert read == trades
     assert read[0].broker is read[1].counterparty
     # The files are of the tables
-    tables = to_arrow(trades)
-    assert pq.read_table(tmp_path / "trades" / "root.parquet").equals(tables.root)
+    # But for the metadata of the fields within its columns, which Parquet does not keep
+    root = pq.read_table(tmp_path / "trades" / "root.parquet")
+    _same(root, to_arrow(trades).root, metadata=False)
+    assert root.schema.metadata == {b"dataclass_native:tag": b"schemas.trades.Trade"}
 
     # Of a class which shares nothing, the one file
     to_parquet((Money(1.0),), tmp_path / "money")

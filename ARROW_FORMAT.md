@@ -1,8 +1,8 @@
 # dataclass-native: Arrow and Parquet layout
 
 How objects of a `@native` class are held in [Arrow](https://arrow.apache.org/docs/format/Columnar.html) tables,
-and in the Parquet files of those tables. The Python implementation, `to_arrow` and `from_arrow`, is the
-reference: where this document and it disagree, one of them has a bug. It is the only implementation so far.
+and in the Parquet files of those tables. There are two implementations, in Python and in C++. The Python one
+is the reference: where this document and it disagree, one of them has a bug.
 
 The objects of a class are a table: a row for each object, and a column for each field. A reader is given the class
 it is to read.
@@ -52,8 +52,8 @@ Arrow has a union type, but Parquet has not, and few tools read Arrow's. A struc
 A member's field is named by its tag, as in a discriminated union when written as msgpack: for a class its tag,
 for an enum `module.QualName`, and for the rest `bool`, `int`, `int8` ... `uint64`, `float`, `float32`, `str`,
 `bytes`, `date`, `time`, `datetime` and `timedelta`. A member which has no tag, as it is not allowed in a
-discriminated union, is named `array` if it is a tuple or a frozenset, `map` if a `Mapping`, and `bin` if a
-`tuple[UInt8, ...]`.
+discriminated union, is named `array` if it is a tuple or a frozenset, `map` if a `Mapping`, and `bytes` if a
+`tuple[UInt8, ...]`, which is held as `bytes` is.
 
 A plain union and a discriminated union are held alike: the field which is not null says which member it is.
 
@@ -104,6 +104,18 @@ fields.
 - An enum's names may be in a dictionary or not, and a string or binary may be of the large kind.
 - A reference to a table or a row which is not there is rejected, as is an object which refers to itself, directly
   or through others.
+
+## In C++
+
+`dataclass_native/arrow.hpp` builds and reads the tables as the
+[Arrow C data interface](https://arrow.apache.org/docs/format/CDataInterface.html) has them, which any Arrow
+library imports and exports without copying. It needs no Arrow library itself.
+
+- What it builds is as above, with every member's name in an enum's dictionary, in the order of the members.
+- It reads the layout above, with columns in any order, missing or added. It does not read the variations which
+  the Python implementation allows, such as an enum's names which are not in a dictionary of `int32`, or a large
+  list: from Python, such tables are read by the Python implementation instead.
+- It does not check that the tables it is given are valid Arrow.
 
 ## Not decided
 

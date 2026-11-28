@@ -10,9 +10,11 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/variant.h>
+#include <nanobind/stl/vector.h>
 
 #include <datetime.h>
 
+#include "dataclass_native/arrow.hpp"
 #include "dataclass_native/msgpack.hpp"
 #include "dataclass_native/types.hpp"
 
@@ -55,6 +57,84 @@ namespace dataclass_native::python
     T from_msgpack(nanobind::bytes data)
     {
         return msgpack::from_msgpack<T>({reinterpret_cast<const std::uint8_t*>(data.c_str()), data.size()});
+    }
+
+    // What a capsule of the Arrow PyCapsule interface holds, of the name it is to have
+    template <class A>
+    A* arrow_pointer(PyObject* capsule, const char* name)
+    {
+        auto* held = static_cast<A*>(PyCapsule_GetPointer(capsule, name));
+        if (!held)
+            throw nanobind::python_error();
+        return held;
+    }
+
+    // A table as the capsules of that interface, which then own it: of its schema, and of its array
+    inline nanobind::tuple arrow_capsules(arrow::Table& table)
+    {
+        auto* schema = new ArrowSchema(std::exchange(table.schema, {}));
+        auto* array = new ArrowArray(std::exchange(table.array, {}));
+        return nanobind::make_tuple(nanobind::steal(PyCapsule_New(schema, "arrow_schema",
+                                                                 [](PyObject* capsule)
+                                                                 {
+                                                                     auto* held = static_cast<ArrowSchema*>(
+                                                                         PyCapsule_GetPointer(capsule, "arrow_schema"));
+                                                                     if (held->release)
+                                                                         held->release(held);
+                                                                     delete held;
+                                                                 })),
+                                    nanobind::steal(PyCapsule_New(array, "arrow_array",
+                                                                 [](PyObject* capsule)
+                                                                 {
+                                                                     auto* held = static_cast<ArrowArray*>(
+                                                                         PyCapsule_GetPointer(capsule, "arrow_array"));
+                                                                     if (held->release)
+                                                                         held->release(held);
+                                                                     delete held;
+                                                                 })));
+    }
+
+    // Native objects as Arrow tables: the capsules of that of the objects, and those of each class they may share,
+    // with its tag. See arrow.hpp
+    template <class T>
+    nanobind::tuple to_arrow(nanobind::sequence objects)
+    {
+        std::vector<const T*> pointers;
+        for (nanobind::handle object : objects)
+            pointers.push_back(&nanobind::cast<const T&>(object));
+        arrow::Tables tables = arrow::to_arrow<T>(std::span<const T* const>(pointers));
+
+        nanobind::list shared;
+        for (auto& [tag, table] : tables.shared)
+            shared.append(nanobind::make_tuple(nanobind::str(tag.data(), tag.size()), arrow_capsules(table)));
+        return nanobind::make_tuple(arrow_capsules(tables.root), shared);
+    }
+
+    // The native objects which tables hold, given as their capsules: shared is of those of the objects they share,
+    // by tag. None if the tables are not read, for whatever reason: that in Python says why, if it does not read them
+    template <class T>
+    nanobind::object from_arrow(nanobind::handle schema, nanobind::handle array, nanobind::dict shared)
+    {
+        std::vector<std::string> tags;
+        tags.reserve(nanobind::len(shared));
+        std::vector<arrow::SharedTable> tables;
+        for (auto [tag, capsules] : shared)
+        {
+            tags.push_back(nanobind::cast<std::string>(tag));
+            const auto pair = nanobind::borrow<nanobind::tuple>(capsules);
+            tables.push_back({tags.back(), arrow_pointer<ArrowSchema>(pair[0].ptr(), "arrow_schema"),
+                              arrow_pointer<ArrowArray>(pair[1].ptr(), "arrow_array")});
+        }
+
+        try
+        {
+            return nanobind::cast(arrow::from_arrow<T>(*arrow_pointer<ArrowSchema>(schema.ptr(), "arrow_schema"),
+                                                       *arrow_pointer<ArrowArray>(array.ptr(), "arrow_array"), tables));
+        }
+        catch (const arrow::Error&)
+        {
+            return nanobind::none();
+        }
     }
 } // namespace dataclass_native::python
 
