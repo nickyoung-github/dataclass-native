@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -353,6 +354,8 @@ def _run(tmp_path: Path, headers: dict[str, str], program: str, *arguments: str)
             "-Wall",
             "-Wextra",
             "-Werror",
+            # MinGW's object files otherwise hold too few sections for the Arrow program
+            *(["-Wa,-mbig-obj"] if sys.platform == "win32" else []),
             "-I",
             str(include_dir()),
             "-I",
