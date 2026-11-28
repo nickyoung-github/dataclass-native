@@ -140,7 +140,7 @@ class _Builder:
         )
 
     def resolve(self, tp: Any, where: str) -> s.Type:
-        return self.__resolve(tp, where)
+        return _arrays_alone(self.__resolve(tp, where), where)
 
     def __use_module(self, name: str):
         if name not in self.__modules:
@@ -182,7 +182,7 @@ class _Builder:
         resolved = []
         for f in fields(cls):
             where = f"{cls.__qualname__}.{f.name}"
-            resolved.append((f.name, self.__resolve(hints[f.name], where), f))
+            resolved.append((f.name, self.resolve(hints[f.name], where), f))
 
         self.__structs[cls] = _RawStruct(cls, resolved)
 
@@ -238,6 +238,12 @@ class _Builder:
         if isinstance(tp, typing.TypeAliasType):
             return self.__resolve(tp.__value__, where, shared, discriminated)
 
+        if isinstance(origin, typing.TypeAliasType):
+            # An alias with parameters, as numpy's NDArray is
+            return self.__resolve(
+                origin.__value__[get_args(tp)], where, shared, discriminated
+            )
+
         if isinstance(tp, typing.NewType):
             return self.__resolve(tp.__supertype__, where, shared, discriminated)
 
@@ -256,6 +262,9 @@ class _Builder:
             )
 
         args = get_args(tp)
+        if (np := sys.modules.get("numpy")) and origin is np.ndarray:
+            return _array(np, tp, where)
+
         if origin is tuple:
             if len(args) == 2 and args[1] is Ellipsis:
                 return s.Sequence(self.__resolve(args[0], where))
@@ -356,6 +365,8 @@ class _Builder:
         members = list(dict.fromkeys(members))
         if not members:
             raise SchemaError(f"{where}: None alone is not a supported type")
+        if len(members) > 1 and any(isinstance(m, s.Array) for m in members):
+            raise SchemaError(f"{where}: {_ARRAY_ALONE}")
 
         if len(members) == 1:
             inner = members[0]
@@ -454,6 +465,46 @@ class _Builder:
             ),
             cls=cls,
         )
+
+
+_ARRAY_ELEMENTS = (
+    *(s.Int(bits, signed) for bits in (8, 16, 32, 64) for signed in (True, False)),
+    s.Float(32),
+    s.Float(),
+)
+_ARRAY_ALONE = (
+    "an array may be a field, or None, but not within a tuple, Mapping or union"
+)
+
+
+def _array(np: Any, tp: Any, where: str) -> s.Array:
+    """The type of a numpy array, as numpy annotates one of a known number of dimensions: Matrix[np.float64], which
+    is np.ndarray[tuple[int, int], np.dtype[np.float64]]"""
+    shape, dtype = (*get_args(tp), None, None)[:2]
+    while isinstance(shape, typing.TypeAliasType):
+        shape = shape.__value__
+    sizes = get_args(shape)
+    if get_origin(shape) is not tuple or not sizes or any(n is not int for n in sizes):
+        raise SchemaError(
+            f"{where}: unsupported array {tp}: its number of dimensions must be given. Use Vector[np.float64], "
+            "Matrix[np.float64], or np.ndarray[tuple[int, int, int], np.dtype[np.float64]]"
+        )
+
+    (scalar,) = get_args(dtype) or (None,)
+    for element in _ARRAY_ELEMENTS:
+        if scalar is getattr(np, s.Array(element).dtype):
+            return s.Array(element, len(sizes))
+    raise SchemaError(
+        f"{where}: unsupported array {tp}: use one of a sized int or float, e.g. Vector[np.float64]"
+    )
+
+
+def _arrays_alone(t: s.Type, where: str) -> s.Type:
+    """t, having checked that an array is not within a container"""
+    alone = t.inner if isinstance(t, s.Optional) else t
+    if any(isinstance(inner, s.Array) and inner is not alone for inner in walk(t)):
+        raise SchemaError(f"{where}: {_ARRAY_ALONE}")
+    return t
 
 
 def _tag(t: s.Type) -> str | None:

@@ -135,8 +135,20 @@ namespace dataclass_native::msgpack
             template <std::unsigned_integral U>
             void big_endian(U value)
             {
-                for (int shift = (static_cast<int>(sizeof(U)) - 1) * 8; shift >= 0; shift -= 8)
-                    byte(static_cast<unsigned>(value >> shift) & 0xFF);
+                std::uint8_t bytes[sizeof(U)];
+                for (std::size_t i = 0; i < sizeof(U); ++i)
+                    bytes[i] = static_cast<std::uint8_t>(value >> ((sizeof(U) - 1 - i) * 8));
+                out.insert(out.end(), bytes, bytes + sizeof(U));
+            }
+
+            // The byte which says what follows, and that: at once, as an array is of many
+            template <std::unsigned_integral U>
+            void tagged(std::uint8_t tag, U value)
+            {
+                std::uint8_t bytes[1 + sizeof(U)]{tag};
+                for (std::size_t i = 0; i < sizeof(U); ++i)
+                    bytes[1 + i] = static_cast<std::uint8_t>(value >> ((sizeof(U) - 1 - i) * 8));
+                out.insert(out.end(), bytes, bytes + sizeof(bytes));
             }
 
             void nil()
@@ -182,12 +194,12 @@ namespace dataclass_native::msgpack
 
             void float32(float value)
             {
-                byte(0xCA), big_endian(std::bit_cast<std::uint32_t>(value));
+                tagged(0xCA, std::bit_cast<std::uint32_t>(value));
             }
 
             void float64(double value)
             {
-                byte(0xCB), big_endian(std::bit_cast<std::uint64_t>(value));
+                tagged(0xCB, std::bit_cast<std::uint64_t>(value));
             }
 
             void str(std::string_view value)
@@ -878,6 +890,45 @@ namespace dataclass_native::msgpack
                 for (; size; --size)
                     value.push_back(Codec<T>::read(reader));
                 return value;
+            }
+        };
+
+        // An array of numbers: as the tuple of them is, after its shape if it is of more than one dimension
+        template <class T, std::size_t N>
+        struct Codec<Array<T, N>>
+        {
+            static constexpr bool shares = false;
+
+            static void write(Writer& writer, const Array<T, N>& value)
+            {
+                writer.out.reserve(writer.out.size() + value->size() * (sizeof(T) + 1));
+                if constexpr (N > 1)
+                {
+                    writer.array(2);
+                    writer.array(N);
+                    for (const std::size_t size : value.shape())
+                        writer.unsigned_integer(size);
+                }
+                Codec<std::vector<T>>::write(writer, *value);
+            }
+
+            static Array<T, N> read(Reader& reader)
+            {
+                if constexpr (N == 1)
+                    return Codec<std::vector<T>>::read(reader);
+                else
+                {
+                    const Reader::Nested nested(reader);
+                    if (reader.array() != 2 || reader.array() != N)
+                        throw Mismatch{};
+                    typename Array<T, N>::Shape shape;
+                    for (std::size_t& size : shape)
+                        size = reader.integer<std::size_t>();
+                    std::vector<T> values = Codec<std::vector<T>>::read(reader);
+                    if (!Array<T, N>::fits(shape, values.size()))
+                        throw Mismatch{};
+                    return {std::move(values), shape};
+                }
             }
         };
 

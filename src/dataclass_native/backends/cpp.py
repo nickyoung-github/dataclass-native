@@ -326,6 +326,10 @@ class _ModuleGenerator:
             case s.Sequence(element):
                 self.__std_includes.add("vector")
                 return f"std::vector<{self.type(element)}>"
+            case s.Array(element, dimensions):
+                self.__runtime = True
+                more = f", {dimensions}" if dimensions > 1 else ""
+                return f"{RUNTIME}::Array<{self.type(element)}{more}>"
             case s.Tuple(elements):
                 self.__std_includes.add("tuple")
                 return f"std::tuple<{', '.join(self.type(e) for e in elements)}>"
@@ -392,6 +396,8 @@ class _ModuleGenerator:
                 return f"{self.type(t)}{{{self.value(inner, v, where)}}}"
             case s.Sequence(element):
                 return f"{self.type(t)}{{{', '.join(self.value(element, e, where) for e in v)}}}"
+            case s.Array():
+                raise SchemaError(f"{where}: an array may not have a default")
             case s.Tuple(elements):
                 values = ", ".join(
                     self.value(e, ev, where) for e, ev in zip(elements, v, strict=True)

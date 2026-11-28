@@ -232,6 +232,20 @@ def test_pydantic_dataclass():
     )
 
 
+def test_arrays():
+    header = cpp.generate(build_schema(["schemas.arrays"]))["schemas/arrays.hpp"]
+    assert "dataclass_native::Array<double> points{};" in header
+    assert (
+        "std::optional<dataclass_native::Array<std::int32_t>> ids = std::nullopt;"
+        in header
+    )
+    assert "dataclass_native::Array<double, 2> values{};" in header
+    assert (
+        "std::optional<dataclass_native::Array<std::uint8_t, 3>> image = std::nullopt;"
+        in header
+    )
+
+
 def test_keywords(headers):
     header = headers["schemas/sub/inner.hpp"]
     assert "namespace schemas::sub::inner" in header
@@ -260,7 +274,7 @@ def test_cli_writes_only_changes(tmp_path, capsys):
         main(["generate", "cpp", "--package", "schemas", "--out", str(tmp_path)]) == 0
     )
     written = capsys.readouterr().out.split()
-    assert len(written) == 6
+    assert len(written) == 7
 
     assert (
         main(["generate", "cpp", "--package", "schemas", "--out", str(tmp_path)]) == 0
@@ -566,11 +580,13 @@ _ARROW_PROGRAM = """
 
 #include "dataclass_native/arrow.hpp"
 
+#include "schemas/arrays.hpp"
 #include "schemas/kinds.hpp"
 #include "schemas/sub/inner.hpp"
 #include "schemas/trades.hpp"
 
 using namespace schemas;
+using dataclass_native::Array;
 using dataclass_native::Shared;
 using dataclass_native::arrow::from_arrow;
 using dataclass_native::arrow::SharedTable;
@@ -645,6 +661,40 @@ int main()
     const auto links = round_trip<kinds::Link>({link, *last}, 1);
     assert((**(*links[0].next)->next).name == "c");
 
+    // Arrays of numbers, which the copies of what holds them share
+    arrays::Curve curve{.name = "usd", .points = Array<double>{{0.0, 1.5}}};
+    curve.ids = Array<std::int32_t>{{1, -2}};
+    curve.octets = Array<std::uint8_t>{{0, 255}};
+    const arrays::Curve copy = curve;
+    assert(copy == curve && copy.points.ptr() == curve.points.ptr() && copy.points->size() == 2);
+    assert(curve != arrays::Curve{.name = "usd"} && arrays::Curve{}.points->empty());
+    const auto curves = round_trip<arrays::Curve>({curve, arrays::Curve{}}, 0);
+    assert((*curves[0].points)[1] == 1.5 && curves[1].points->empty() && !curves[1].ids);
+    round_trip<arrays::Book>({arrays::Book{.curves = {curve, curve}, .base = curve}}, 0);
+    const auto packed = dataclass_native::msgpack::to_msgpack(curve);
+    assert(dataclass_native::msgpack::from_msgpack<arrays::Curve>(packed) == curve);
+
+    // And those of more dimensions, which have a shape
+    arrays::Surface surface{.values = Array<double, 2>{{0.0, 1.0, 2.0, 3.0, 4.0, 5.0}, {2, 3}}};
+    surface.image = Array<std::uint8_t, 3>{{1, 2, 3, 4}, {2, 1, 2}};
+    assert(surface.values(1, 2) == 5.0 && surface.values.shape()[1] == 3 && (*surface.image)(1, 0, 1) == 4);
+    const arrays::Surface turned{.values = Array<double, 2>{{0.0, 1.0, 2.0, 3.0, 4.0, 5.0}, {3, 2}}};
+    assert(surface != turned);
+    const arrays::Surface none{.values = Array<double, 2>{{}, {0, 3}}};
+    const auto surfaces = round_trip<arrays::Surface>({surface, arrays::Surface{}, none}, 0);
+    assert(surfaces[0].values(1, 0) == 3.0 && surfaces[2].values.shape()[1] == 3 && !surfaces[1].image);
+    round_trip<arrays::Book>({arrays::Book{.surface = surface}}, 0);
+    const auto shaped = dataclass_native::msgpack::to_msgpack(surface);
+    assert(dataclass_native::msgpack::from_msgpack<arrays::Surface>(shaped) == surface);
+    try
+    {
+        Array<double, 2>{{1.0}, {2, 2}};
+        assert(false);
+    }
+    catch (const std::invalid_argument&)
+    {
+    }
+
     std::cout << "ok" << std::endl;
     return 0;
 }
@@ -654,7 +704,7 @@ int main()
 @needs_compiler
 def test_arrow_in_cpp_alone(tmp_path):
     """Objects are held in Arrow tables, and read from them, with no Arrow library"""
-    modules = [*SCHEMA_MODULES, "schemas.kinds"]
+    modules = [*SCHEMA_MODULES, "schemas.kinds", "schemas.arrays"]
     headers = cpp.generate(build_schema(modules))
     assert _run(tmp_path, headers, _ARROW_PROGRAM).strip() == "ok"
 

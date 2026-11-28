@@ -81,6 +81,7 @@ def test_runtime_with_extensions(built, mode):
             str(TESTS / "test_runtime.py"),
             str(TESTS / "test_msgpack.py"),
             str(TESTS / "test_arrow.py"),
+            str(TESTS / "test_arrays.py"),
             "-q",
             "--no-cov",
             "-p",
@@ -108,6 +109,7 @@ def test_extensions_install_to_their_packages(built, tmp_path):
     assert installed == [
         f"schemas/{name}_native"
         for name in (
+            "_arrays",
             "_common",
             "_kinds",
             "_trades",
@@ -374,4 +376,4 @@ def test_cli(tmp_path, capsys):
         "schemas/_common_native.cpp",
         "extensions.cmake",
     } <= written
-    assert len(written) == 13
+    assert len(written) == 15

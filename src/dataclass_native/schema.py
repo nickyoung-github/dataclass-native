@@ -97,6 +97,23 @@ class Sequence:
 
 
 @dataclass(frozen=True)
+class Array:
+    """A numpy array of numbers, of a known number of dimensions, which is not copied when read"""
+
+    element: "Int | Float"
+    dimensions: int = 1
+
+    @property
+    def dtype(self) -> str:
+        """The name of the numpy dtype of its elements, e.g. float64"""
+        match self.element:
+            case Int(bits, signed):
+                return f"{'' if signed else 'u'}int{bits}"
+            case Float(bits):
+                return f"float{bits}"
+
+
+@dataclass(frozen=True)
 class Tuple:
     """tuple[A, B, ...]: a fixed number of elements"""
 
@@ -150,6 +167,7 @@ type Type = (
     | StructRef
     | Optional
     | Sequence
+    | Array
     | Tuple
     | Set
     | Map
@@ -295,7 +313,7 @@ def wire_kind(t: Type) -> tuple[str, ...]:
             return ("ref", target.module, target.name)
         case Union(discriminated=True):
             return ("map",)
-        case Optional() | Union():
+        case Optional() | Union() | Array():
             raise ValueError(f"{t} is not a union member")
 
 
@@ -336,6 +354,9 @@ def conforms(t: Type, value: Any, schema: "Schema | None" = None) -> bool:
             return type(value) is tuple and all(
                 conforms(element, v, schema) for v in value
             )
+        case Array():
+            # Which has no default, and is in no union
+            return False
         case Tuple(elements):
             return (
                 type(value) is tuple
