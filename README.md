@@ -16,7 +16,8 @@ The approach of dataclass-native is to generate native classes - currently C++, 
 whose storage the Python classes use directly. Native serialisation (msgpack, Arrow/Parquet) is planned.
 
 **Status:** early. Schema introspection, C++ header generation and the native Python binding work. Serialisation
-to msgpack works, in Python and C++. Arrow, Parquet and Rust are to come: see [DESIGN.md](DESIGN.md).
+works to msgpack, in Python and C++, and to Arrow and Parquet, in Python. Rust is to come: see
+[DESIGN.md](DESIGN.md).
 
 ## Defining a schema
 
@@ -200,6 +201,22 @@ the same bytes, so what one writes the other reads. C++ of your own does the sam
 dataclass_native::Bytes data = dataclass_native::msgpack::to_msgpack(trade);
 auto read = dataclass_native::msgpack::from_msgpack<Trade>(data);
 ```
+
+### Arrow and Parquet
+
+```python
+from dataclass_native import from_parquet, to_arrow, to_parquet
+
+tables = to_arrow(trades)  # tables.root is a pyarrow.Table, with a row for each trade
+# trades/root.parquet, and a file for each class the trades share
+to_parquet(trades, "trades")
+from_parquet(Trade, "trades") == trades  # True
+```
+
+This needs pyarrow: install `dataclass-native[arrow]`. Each field is a column, and an object held by `Shared`
+fields is a row of its class's own table, which those fields refer to by row, as a foreign key does. The layout is
+in [ARROW_FORMAT.md](ARROW_FORMAT.md). For now this is implemented in Python, and a class which holds itself, such
+as a tree, cannot be written.
 
 ## Modes
 
