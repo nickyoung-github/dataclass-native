@@ -224,6 +224,9 @@ extension module `pkg._mod_native`, which binds the module's types with nanobind
   read is a view of the member, not a copy: it keeps the object holding it alive.
 - It also checks what nanobind would let through: that a container is of its exact type (a `list` is not a
   `tuple`), and that a struct is exactly of its class.
+- An enum may be given as a member or as a member's value, as `Side("buy")` takes it, but not by name. Within a
+  union only a member will do: a value does not say which of the union's members it is of. A plain dataclass, in
+  `pure` mode, holds the value it was given, which the serialisers write as its member.
 - `__reduce__` and `__setstate__` are defined, as the default copy and pickle would copy the handle. They give what
   a plain dataclass gives, `(cls,)` and `{field: value}`, so a pickle made in one mode loads in any.
 - `cls._from_native(handle)` wraps a native object without copying. `@native_function` is the way to call C++.

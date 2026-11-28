@@ -13,7 +13,7 @@ import pytest
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from schemas import functions
 from schemas.common import Currency, Fund, Money, Party, Side
-from schemas.kinds import Kinds
+from schemas.kinds import Graded, Kinds, Level
 from schemas.sub.inner import Order
 from schemas.trades import Bond, Cash, Trade
 from schemas.tree import Expr, Leaf, Node, Wrapper
@@ -148,6 +148,27 @@ def test_kinds():
     assert Kinds(tagged=3).tagged == 3
 
 
+def test_enums_by_value():
+    by_value = _any(Graded)(
+        "high", "sell", (2, Currency.GBP), frozenset({"low"}), {"buy": "high"}
+    )
+    members = Graded(
+        Level.HIGH,
+        Side.SELL,
+        (Currency.EUR, Currency.GBP),
+        frozenset({Level.LOW}),
+        {Side.BUY: Level.HIGH},
+    )
+    if BOUND:
+        assert by_value == members
+        assert type(by_value.level) is Level and type(by_value.side) is Side
+        assert type(by_value.currencies[0]) is Currency
+        assert type(next(iter(by_value.by_side))) is Side
+    else:
+        # A plain dataclass holds what it is given
+        assert (by_value.side, by_value.currencies[0]) == ("sell", 2)
+
+
 def test_equality_hash_and_repr():
     assert Money(1.5, Currency.EUR) == MONEY
     assert Money(1.5) != MONEY
@@ -246,7 +267,10 @@ def test_fields_are_stored_natively():
     ("make", "message"),
     [
         (lambda: _any(Money)("x"), "Money.amount cannot be 'x'"),
-        (lambda: _any(Money)(1.0, 1), "Money.currency cannot be 1"),
+        (lambda: _any(Money)(1.0, 0), "Money.currency cannot be 0"),
+        (lambda: _any(Money)(1.0, "EUR"), "Money.currency cannot be 'EUR'"),
+        # In a union, only a member is the enum's
+        (lambda: _any(Graded)(either="high"), "Graded.either cannot be 'high'"),
         (lambda: _any(Money)(1.0, Side.BUY), "Money.currency cannot be <Side.BUY"),
         (lambda: _any(Party)("p", rating=2**31), "Party.rating cannot be 2147483648"),
         (lambda: _any(Party)(None), "Party.name cannot be None"),
@@ -453,8 +477,8 @@ def test_native_function_rejects():
         TypeError, match=r"schemas.functions.total: amounts cannot be \[\]"
     ):
         functions.total(_any([]))
-    with pytest.raises(TypeError, match="total: currency cannot be 1"):
-        functions.total((), _any(1))
+    with pytest.raises(TypeError, match="total: currency cannot be 0"):
+        functions.total((), _any(0))
     # Exactly a Party, as a field must be
     with pytest.raises(TypeError, match="renamed: party cannot be Fund"):
         functions.renamed(FUND)

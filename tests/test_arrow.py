@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from schemas.common import Currency, Fund, Money, Party, Side
-from schemas.kinds import Kinds, Link
+from schemas.kinds import Graded, Kinds, Level, Link
 from schemas.sub.inner import Order
 from schemas.trades import Bond, Cash, Trade
 from schemas.tree import Node
@@ -346,6 +346,28 @@ def test_object_sharing_itself():
     # Which no object written could
     with pytest.raises(ValueError, match="Link.next cannot be read"):
         from_arrow(Link, tables)
+
+
+def test_enums_by_value():
+    # A plain dataclass holds the values it is given, and a bound one their members: both are written as the members
+    graded: Any = Graded
+    by_value = graded(
+        "high", "sell", (2, Currency.GBP), frozenset({"low"}), {"buy": "high"}
+    )
+    members = Graded(
+        Level.HIGH,
+        Side.SELL,
+        (Currency.EUR, Currency.GBP),
+        frozenset({Level.LOW}),
+        {Side.BUY: Level.HIGH},
+    )
+    tables = to_arrow((by_value,))
+    assert tables.root.to_pylist() == to_arrow((members,)).root.to_pylist()
+    assert tables.root.column("by_side").to_pylist() == [[("BUY", "HIGH")]]
+    assert from_arrow(Graded, tables) == (members,)
+
+    with pytest.raises(TypeError, match="Graded.level cannot be 'HIGH'"):
+        to_arrow((graded("HIGH"),))
 
 
 def test_invalid_values():

@@ -292,15 +292,22 @@ def _order(t: s.Type) -> Callable[[Any], Any] | None:
         return None
     enum = describe(t.cls)
     assert isinstance(enum, s.Enum)
-    return {t.cls[member.name]: member.value for member in enum.members}.__getitem__
+    order = {member.name: member.value for member in enum.members}
+    return {
+        value: order[member.name] for value, member in s.enum_members(t.cls).items()
+    }.__getitem__
 
 
 def _ordered(values: Any, key: Callable[[Any], Any] | None) -> list[Any]:
     try:
-        return sorted(values, key=key)
+        ordered = sorted(values, key=key)
     except (TypeError, KeyError):
         # Not all of the type, so they have no order
         raise _Invalid from None
+    if key and len({key(value) for value in ordered}) < len(ordered):
+        # An enum's member, and its value too
+        raise _Invalid
+    return ordered
 
 
 def _exactly(typ: type, pack: Callable[[bytearray, Any], None]) -> _Encode:
@@ -418,7 +425,10 @@ def _encoder(t: s.Type) -> _Encode:
             )
 
         case s.EnumRef(cls=enum):
-            names = {member: _packed(m.pack_str, member.name) for member in enum}
+            names = {
+                value: _packed(m.pack_str, member.name)
+                for value, member in s.enum_members(enum).items()
+            }
 
             def member(value: Any, out: bytearray, writer: _Writer):
                 try:

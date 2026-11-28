@@ -2,10 +2,11 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum, auto
 
 from dataclass_native import DiscriminatedUnion, Shared, UInt8, native
 
-from .common import Money, Side
+from .common import Currency, Money, Side
 
 
 @native
@@ -20,6 +21,24 @@ class Kinds:
     container: tuple[int, ...] | Mapping[str, Money] | None = None
     tagged: DiscriminatedUnion[Money, Side, int] = 0
     blobs: tuple[bytes, ...] = ()
+
+
+class Level(StrEnum):
+    LOW = auto()
+    HIGH = auto()
+
+
+@native
+@dataclass(frozen=True)
+class Graded:
+    """Enums, which may be given by value"""
+
+    level: Level = Level.LOW
+    side: Side | None = None
+    currencies: tuple[Currency, ...] = ()
+    levels: frozenset[Level] = frozenset()
+    by_side: Mapping[Side, Level] = field(default_factory=dict)
+    either: Level | int = 0
 
 
 @native

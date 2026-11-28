@@ -394,11 +394,15 @@ def _plain(t: s.Type) -> _Plain:
             return number
 
         case s.EnumRef(cls=enum):
+            names = {
+                value: member.name for value, member in s.enum_members(enum).items()
+            }
 
             def member(value: Any, writer: _Writer) -> str:
-                if type(value) is not enum:
-                    raise _Invalid
-                return value.name
+                try:
+                    return names[value]
+                except (KeyError, TypeError):
+                    raise _Invalid from None
 
             return member
 
