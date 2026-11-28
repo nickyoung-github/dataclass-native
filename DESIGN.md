@@ -162,7 +162,8 @@ This means:
 Identities are only valid within one write. Content-hash ids, for deduplication across writes, may come later.
 
 **C++ drivers.** For each struct, the generator emits `dataclass_native::Reflect<T>`: its name, its tag, whether it
-may hold a `Shared` value, and a tuple of its fields, each a name, a member pointer and whether it has a default.
+may hold a `Shared` value and of which classes, whether it may be held in Arrow tables, and a tuple of its fields,
+each a name, a member pointer and whether it has a default.
 For each enum, its members' names. The drivers are written against that, and otherwise go by the C++ type alone:
 
 - How a value is written must therefore follow from its C++ type. So a discriminated union is a type of its own,
@@ -175,8 +176,14 @@ For each enum, its members' names. The drivers are written against that, and oth
 - From Python, an object stored natively is written and read by it, through `__msgpack__` and `__from_msgpack__`
   of its native class. A pydantic dataclass, or a class which may hold one, is read by the Python codec instead,
   so that pydantic validates what is read.
-- Arrow: nanoarrow, exported through the Arrow C Data Interface (`__arrow_c_stream__`). pyarrow, polars and duckdb
-  can read it without copying, and our extension needn't link Arrow C++, which avoids version clashes with pyarrow.
+- Arrow: `dataclass_native/arrow.hpp`, which builds and reads tables as the Arrow C data interface has them:
+  an `ArrowSchema` and an `ArrowArray`. pyarrow, polars and duckdb import those without copying, and our extension
+  needn't link Arrow C++, which avoids version clashes with pyarrow. Written by hand against that interface, which
+  is two structs, and not with nanoarrow as first planned: so the headers still depend on nothing.
+- It finds the objects which are shared before it builds any column, so that each has its row: a column cannot be
+  added to while a row of it is being added. From Python, through `__arrow__` and `__from_arrow__` of the native
+  class, as capsules of the Arrow PyCapsule interface. What the C++ does not read, the Python implementation
+  does: a layout it allows for, or tables which do not hold the class, of which it then says why.
 - Parquet: written with pyarrow from Python. For C++ users, an optional component linking Arrow C++.
 
 **Rust.** serde, with `rmp_serde::to_vec_named` (structs as maps). Unions need a custom serialiser for the
@@ -289,8 +296,8 @@ what an object is made from, before the native class checks it.
    `@native_function`.
 3. **Done:** the written wire format specification, the pure-Python msgpack codec, `Reflect<T>` and the C++
    msgpack driver.
-4. **Partly done:** the Arrow layout, and its Python implementation with pyarrow, which also writes Parquet. To
-   come: Arrow in C++ via nanoarrow, and optional Arrow C++ Parquet.
+4. **Done:** the Arrow layout, its Python implementation with pyarrow, which also writes Parquet, and Arrow in
+   C++. To come, if wanted: Parquet from C++ alone, which needs Arrow C++.
 5. Rust: structs with serde, PyO3 bindings, Arrow.
 6. Mutable classes.
 7. JSON, in Python and C++. The aim is that pydantic's `TypeAdapter` reads what this writes, and this reads what

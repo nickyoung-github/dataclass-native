@@ -12,7 +12,7 @@ from typing import Any
 
 from .. import schema as s
 from .._native import extension_name
-from .cpp import header_path, identifier, namespace, render
+from .cpp import header_path, identifier, in_arrow, namespace, render
 
 MANIFEST = "extensions.cmake"
 
@@ -62,7 +62,11 @@ def generate_module(schema: s.Schema, module_name: str) -> str:
             for e in module.enums
         ],
         structs=[
-            described(st) | {"fields": [named(f.name) for f in st.fields]}
+            described(st)
+            | {
+                "fields": [named(f.name) for f in st.fields],
+                "arrow": in_arrow(schema, st),
+            }
             for st in module.structs
         ],
     )

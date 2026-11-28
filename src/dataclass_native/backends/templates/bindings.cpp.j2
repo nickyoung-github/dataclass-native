@@ -37,6 +37,10 @@ NB_MODULE({{ extension }}, m)
         .def_rw("{{ field.name }}", &{{ struct.type }}::{{ field.identifier }})
 {% endfor %}
         .def("__msgpack__", &dataclass_native::python::to_msgpack<{{ struct.type }}>)
+{% if struct.arrow %}
+        .def_static("__arrow__", &dataclass_native::python::to_arrow<{{ struct.type }}>)
+        .def_static("__from_arrow__", &dataclass_native::python::from_arrow<{{ struct.type }}>)
+{% endif %}
         .def_static("__from_msgpack__", &dataclass_native::python::from_msgpack<{{ struct.type }}>);
     schema["{{ struct.name }}"] = "{{ struct.hash }}";
 {% endfor %}

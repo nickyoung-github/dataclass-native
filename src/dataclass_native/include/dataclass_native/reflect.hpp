@@ -12,6 +12,9 @@ namespace dataclass_native
     //   of a struct   name      The class's name
     //                 tag       What names it when serialised
     //                 shares    Whether one may hold, however deeply, a Shared value
+    //                 shared    The classes of those values, as Types
+    //                 arrow     Whether it may be held in an Arrow table: not if it, or a class it may share, holds
+    //                           itself
     //                 fields    A std::tuple of Field
     //
     //   of an enum    name, tag
@@ -31,6 +34,12 @@ namespace dataclass_native
 
     template <class S, class T>
     Field(std::string_view, T S::*, bool) -> Field<S, T>;
+
+    // Some types
+    template <class... Ts>
+    struct Types
+    {
+    };
 
     template <class E>
     struct Member

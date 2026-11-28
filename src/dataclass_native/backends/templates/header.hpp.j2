@@ -62,6 +62,8 @@ namespace dataclass_native
         static constexpr std::string_view name = {{ struct.name_literal }};
         static constexpr std::string_view tag = {{ struct.tag_literal }};
         static constexpr bool shares = {{ struct.shares }};
+        using shared = Types<{{ struct.shared }}>;
+        static constexpr bool arrow = {{ struct.arrow }};
         static constexpr std::tuple fields{
 {% for field in struct.fields %}
             Field{ {{- field.literal }}, &{{ struct.qualified }}::{{ field.name }}, {{ field.has_default }}},

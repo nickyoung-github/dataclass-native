@@ -1,8 +1,10 @@
 """
 Arrow tables of @native objects, and Parquet files of those tables, in the layout of ARROW_FORMAT.md.
 
-This is the reference implementation of that layout, in Python with pyarrow: it gets and sets the fields of @native
-objects as any Python code does, so works in every mode. pyarrow is needed only to call it.
+write() and read() are the reference implementation of that layout, in Python: they get and set the fields of @native
+objects as any Python code does, so work in every mode. to_arrow() and from_arrow() use them, unless the objects are
+stored natively: then the C++ of dataclass_native/arrow.hpp builds and reads the tables from the native objects
+themselves. pyarrow is needed only to call any of these.
 """
 
 import datetime as dt
@@ -15,7 +17,16 @@ from weakref import WeakKeyDictionary
 
 from . import schema as s
 from ._native import is_native, native_info
-from ._wire import _brief, _Invalid, _member, _order, _ordered, _struct_class
+from ._wire import (
+    _brief,
+    _Invalid,
+    _member,
+    _native_class,
+    _order,
+    _ordered,
+    _struct_class,
+)
+from ._wire import _codec as _wire_codec
 from .introspect import _tag, describe, walk
 from .schema import SchemaError
 
@@ -38,16 +49,100 @@ class ArrowTables(NamedTuple):
 
 def to_arrow(values: Iterable[Any], cls: type | None = None) -> ArrowTables:
     """
-    Objects of a @native class as Arrow tables: a row each, and a column for each field.
+    Objects of a @native class as Arrow tables: a row each, and a column for each field. Objects stored natively are
+    held natively.
 
     :param cls: Their class, which need be given only if there may be none
     """
+    values = list(values)
+    cls = _class(values, cls)
+    native = _native(cls)
+    if native is None:
+        return write(values, cls)
+
+    from ._runtime import native_object
+
+    pa = _pyarrow()
+    objects = []
+    for value in values:
+        if type(value) is not cls:
+            raise TypeError(f"{value!r} is not a {cls.__qualname__}")
+        objects.append(native_object(value))
+    root, shared = native.__arrow__(objects)
+    return ArrowTables(
+        _imported(pa, root),
+        {tag: _imported(pa, capsules) for tag, capsules in shared},
+    )
+
+
+def from_arrow(cls: type, tables: Any) -> tuple[Any, ...]:
+    """
+    The objects of a @native class which Arrow tables hold. Raises ValueError if they are not tables of that class.
+
+    :param tables: As to_arrow gives. Or the pyarrow.Table of the objects alone, if their class shares none
+    """
+    native = _native(cls)
+    # A pydantic dataclass is made in Python, so that pydantic validates it
+    if native is not None and not _wire_codec(cls).validated:
+        from ._runtime import wrap
+
+        pa = _pyarrow()
+        root, shared = tables if isinstance(tables, tuple) else (tables, {})
+        objects = native.__from_arrow__(
+            *_exported(pa, root),
+            {tag: _exported(pa, table) for tag, table in shared.items()},
+        )
+        # None if it does not read them: then what follows does, or says why not
+        if objects is not None:
+            return tuple(wrap(cls, obj) for obj in objects)
+    return read(cls, tables)
+
+
+def _native(cls: Any) -> Any:
+    """The native class of a bound class, if that holds its objects in Arrow tables itself"""
+    native = _native_class(cls)
+    return native if hasattr(native, "__arrow__") else None
+
+
+class _Capsules:
+    """A table as the Arrow PyCapsule interface exports it, which pyarrow imports"""
+
+    def __init__(self, capsules: tuple[Any, Any]):
+        self.capsules = capsules
+
+    def __arrow_c_array__(self, requested_schema: Any = None) -> tuple[Any, Any]:
+        return self.capsules
+
+
+def _imported(pa: Any, capsules: tuple[Any, Any]) -> Any:
+    return pa.Table.from_batches([pa.record_batch(_Capsules(capsules))])
+
+
+def _exported(pa: Any, table: Any) -> tuple[Any, Any]:
+    """The capsules of a table, as one array"""
+    if isinstance(table, pa.Table):
+        batches = table.combine_chunks().to_batches()
+        table = (
+            batches[0]
+            if len(batches) == 1
+            else pa.RecordBatch.from_pylist([], schema=table.schema)
+        )
+    return table.__arrow_c_array__()
+
+
+def _class(values: list[Any], cls: type | None) -> type:
+    if cls is not None:
+        return cls
+    if not values:
+        raise TypeError("The class of no objects must be given")
+    return type(values[0])
+
+
+def write(values: Iterable[Any], cls: type | None = None) -> ArrowTables:
+    """As to_arrow, in Python alone"""
     pa = _pyarrow()
     values = list(values)
-    if cls is None:
-        if not values:
-            raise TypeError("The class of no objects must be given")
-        cls = type(values[0])
+    cls = _class(values, cls)
     codec = _codec(cls)
     # Before any is written, as a class may not have one
     schemas = {c.tag: c.schema(pa) for c in (codec, *map(_codec, codec.shared))}
@@ -69,12 +164,8 @@ def to_arrow(values: Iterable[Any], cls: type | None = None) -> ArrowTables:
     )
 
 
-def from_arrow(cls: type, tables: Any) -> tuple[Any, ...]:
-    """
-    The objects of a @native class which Arrow tables hold. Raises ValueError if they are not tables of that class.
-
-    :param tables: As to_arrow gives. Or the pyarrow.Table of the objects alone, if their class shares none
-    """
+def read(cls: type, tables: Any) -> tuple[Any, ...]:
+    """As from_arrow, in Python alone"""
     codec = _codec(cls)
     root, shared = tables if isinstance(tables, tuple) else (tables, {})
     reader = _Reader({tag: table.to_pylist() for tag, table in shared.items()})
@@ -247,6 +338,9 @@ def _shared_classes(t: s.Type, shared: list[type], seen: set[type]) -> list[type
 
 def _member_name(member: s.Type) -> str:
     """What names a union's member, as a field of the struct the union is: its tag, else what msgpack writes it as"""
+    if isinstance(member, s.Sequence) and member.element == _BYTE:
+        # As bytes, which it is natively
+        return "bytes"
     return _tag(member) or s.wire_kind(member)[0]
 
 
