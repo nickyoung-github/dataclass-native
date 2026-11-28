@@ -5,6 +5,7 @@ generates code. Built by dataclass_native.introspect.
 
 import datetime as dt
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass, field, fields, is_dataclass
 from enum import Enum as PyEnum
 from hashlib import sha256
@@ -258,6 +259,15 @@ def schema_hash(item: Struct | Enum) -> str:
 def is_key(t: Type) -> bool:
     """Whether t may be a frozenset element or Mapping key: scalars and enums only"""
     return isinstance(t, SCALARS + (EnumRef,))
+
+
+def enum_members(cls: type[PyEnum]) -> dict[Any, PyEnum]:
+    """The member which each value given for an enum stands for: itself, or the member whose value it is"""
+    members: dict[Any, PyEnum] = {member: member for member in cls}
+    for member in cls:
+        with suppress(TypeError):  # A value which cannot be hashed
+            members.setdefault(member.value, member)
+    return members
 
 
 def wire_kind(t: Type) -> tuple[str, ...]:

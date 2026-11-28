@@ -12,7 +12,7 @@ from typing import Any
 import msgpack
 import pytest
 from schemas.common import Currency, Fund, Money, Party, Side
-from schemas.kinds import Kinds, Link
+from schemas.kinds import Graded, Kinds, Level, Link
 from schemas.trades import Bond, Cash, Trade
 from schemas.tree import Expr, Leaf, Node, Wrapper
 from schemas.validated import Account, Holder
@@ -20,10 +20,12 @@ from schemas.validated import Account, Holder
 from dataclass_native import (
     Float32,
     Int32,
+    Mode,
     Shared,
     UInt8,
     UInt64,
     from_msgpack,
+    mode,
     to_msgpack,
 )
 from dataclass_native._msgpack import Ext, unpack
@@ -446,6 +448,34 @@ def test_invalid_data(tp, data, message):
 def test_invalid_values(value, tp):
     with pytest.raises(TypeError, match="cannot be written as "):
         to_msgpack(value, tp)
+
+
+def test_enums_by_value():
+    # A plain dataclass holds the values it is given, and a bound one their members: both are written as the members
+    graded: Any = Graded
+    by_value = graded(
+        "high", "sell", (2, Currency.GBP), frozenset({"low"}), {"buy": "high"}
+    )
+    members = Graded(
+        Level.HIGH,
+        Side.SELL,
+        (Currency.EUR, Currency.GBP),
+        frozenset({Level.LOW}),
+        {Side.BUY: Level.HIGH},
+    )
+    data = to_msgpack(members)
+    assert to_msgpack(by_value) == write(by_value) == data
+    assert unpack(data)["by_side"] == {"BUY": "HIGH"}
+    assert from_msgpack(Graded, to_msgpack(by_value)) == members
+
+    # But not by name, nor in a union
+    for invalid in ({"level": "HIGH"}, {"either": "high"}):
+        with pytest.raises(TypeError, match="cannot be"):
+            to_msgpack(graded(**invalid))
+    if mode() is Mode.PURE:
+        # A plain dataclass may hold a key twice: as a member, and as its value
+        with pytest.raises(TypeError, match="Graded.by_side cannot be"):
+            to_msgpack(graded(by_side={Side.BUY: Level.LOW, "buy": Level.LOW}))
 
 
 def test_invalid_field():

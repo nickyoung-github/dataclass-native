@@ -283,7 +283,10 @@ def _to_native(t: s.Type) -> _Converter:
     match t:
         case s.EnumRef(cls=enum):
             native = _native_enum(t)
-            members = {member: getattr(native, member.name) for member in enum}
+            members = {
+                value: getattr(native, member.name)
+                for value, member in s.enum_members(enum).items()
+            }
 
             def member(value: Any) -> Any:
                 try:
