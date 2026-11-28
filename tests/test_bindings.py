@@ -1,4 +1,4 @@
-"""The Python extensions generated for schema modules: built with CMake, then test_runtime.py and test_msgpack.py are run with them"""
+"""The Python extensions generated for schema modules: built with CMake, then the tests which are for every mode are run with them"""
 
 import os
 import shutil
@@ -80,6 +80,7 @@ def test_runtime_with_extensions(built, mode):
             "pytest",
             str(TESTS / "test_runtime.py"),
             str(TESTS / "test_msgpack.py"),
+            str(TESTS / "test_arrow.py"),
             "-q",
             "--no-cov",
             "-p",
